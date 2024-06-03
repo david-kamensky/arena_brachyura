@@ -48,12 +48,16 @@ static FLOOR_TILE_W: f32 = (WALL_H as f32);
 static PLAYER_SPEED: f32 = 1.2;
 static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
-static PL_PROJ_SPEED: f32 = 1.7;
+//static PL_PROJ_SPEED: f32 = 1.7;
+static PL_PROJ_SPEED: f32 = 2.0;
 static PL_PROJ_MAX_FLIGHT_TIME: i32 = 3000;
 static PL_PROJ_R: f32 = 50.0;
 static PL_PROJ_SPLASH_TIME: i32 = 250;
 static PL_GUN_SCREEN_FRAC: f32 = 0.3;
 static PLAYER_ACCEL: f32 = 7e-3;
+static PLAYER_JUMP_SPEED: f32 = 0.8;
+static GRAV_ACCEL: f32 = 2e-3;
+static PLAYER_AIR_CONTROL: f32 = 0.25;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 static BOB_AMPLITUDE: f32 = 30.0;
 static BOB_SPEED: f32 = 0.007;
@@ -349,7 +353,7 @@ fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
 }
 
 fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
-    let x_trans = SVector::<f32,3>::new(x[0] - player.x[0], -x[2],
+    let x_trans = SVector::<f32,3>::new(x[0] - player.x[0], player.z - x[2],
                                         x[1] - player.x[1]);
     let cos_yaw = player.yaw.cos();
     let sin_yaw = player.yaw.sin();
@@ -414,15 +418,25 @@ impl<'a> Projectile<'a> {
     }
 }
 
+enum SpeedLimitType {
+    Strict,
+    StraferunSoft,
+    IsotropicSoft
+}
+
 struct Player<'a> {
     pub x: SVector<f32,2>,
     pub v: SVector<f32,2>,
+    // Separated-out for 2.5D physics:
+    pub z: f32,
+    pub vz: f32,
     pub yaw: f32,
     pub pitch: f32,
     pub l: i32,
     pub r: i32,
     pub u: i32,
     pub d: i32,
+    pub want_to_jump: bool,
     pub projectile: Projectile<'a>,
     pub gun_sprite: &'a Surface <'a>,
     pub gun_ready_sprite: &'a Surface <'a>,
@@ -433,12 +447,15 @@ impl<'a> Player<'a> {
     fn new(texture_set: &'a TextureSet<'a>) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
                v: SVector::<f32,2>::new(0.0,0.0),
+               z: 0.0,
+               vz: 0.0,
                yaw: 0.0,
                pitch: 0.0,
                l: 0,
                r: 0,
                u: 0,
                d: 0,
+               want_to_jump: false,
                projectile: Projectile::new(&texture_set.projectile_sprite,
                                            &texture_set.
                                            projectile_splash_sprite),
@@ -465,18 +482,28 @@ impl<'a> Player<'a> {
                 Event::KeyDown{keycode: Some(Keycode::D), .. } => self.r = 1,
                 Event::KeyDown{keycode: Some(Keycode::W), .. } => self.u = 1,
                 Event::KeyDown{keycode: Some(Keycode::S), .. } => self.d = 1,
+                Event::KeyDown{keycode: Some(Keycode::Space), .. }
+                => {self.want_to_jump = true},
                 Event::KeyUp{keycode: Some(Keycode::A), .. } => self.l = 0,
                 Event::KeyUp{keycode: Some(Keycode::D), .. } => self.r = 0,
                 Event::KeyUp{keycode: Some(Keycode::W), .. } => self.u = 0,
                 Event::KeyUp{keycode: Some(Keycode::S), .. } => self.d = 0,
+                Event::KeyUp{keycode: Some(Keycode::Space), .. }
+                => {self.want_to_jump = false},
                 _ => {}
             } // match
         } // for
         return false;
     }
+    pub fn jump_if_desired(&mut self){
+        if(self.want_to_jump && self.z == 0.0){
+            self.vz = PLAYER_JUMP_SPEED;
+            self.want_to_jump = false;
+        }
+    }
     pub fn fire_projectile(self: &mut Player<'a>){
         if(!self.projectile.ready){return;}
-        self.projectile.x = SVector::<f32,3>::new(self.x[0], self.x[1], 0.0);
+        self.projectile.x = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
         let pc = self.pitch.cos();
         let ps = self.pitch.sin();
         let yc = self.yaw.cos();
@@ -506,8 +533,6 @@ impl<'a> Player<'a> {
                                       2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
                                       self, z_buffer);
         }
-        // TODO: Have different gun sprites based on whether projectile is
-        // ready to fire.
         if(self.projectile.ready){
             draw_sprite_2d(self.gun_ready_sprite, dest, &gun_rect, z_buffer);
             return;
@@ -519,30 +544,71 @@ impl<'a> Player<'a> {
                                   2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
                                   self, z_buffer);
     }
+    pub fn enforce_speed_limit(&self, a: &mut SVector::<f32,2>,
+                               limit_type: SpeedLimitType){
+        match limit_type {
+            SpeedLimitType::Strict => {
+                // Prevent acceleration from increasing speed:
+                let norm_v = self.v.norm();
+                if(norm_v > PLAYER_SPEED){
+                    let v_hat = self.v/norm_v;
+                    let a_dot_v_hat = a.dot(&v_hat);
+                    if(a_dot_v_hat > 0.0){
+                        *a -= a_dot_v_hat*v_hat;
+                    }
+                }},
+            SpeedLimitType::StraferunSoft => {
+                // Allow strafe-running for sqrt(2) speed increase, and
+                // building up higher speeds through bunny-hopping:
+                let nyaw = -self.yaw;
+                let forward = SVector::<f32,2>::new(nyaw.cos(), nyaw.sin());
+                let rightward = SVector::<f32,2>::new(-nyaw.sin(), nyaw.cos());
+                if(self.v.dot(&forward).abs() > PLAYER_SPEED){
+                    *a -= a.dot(&forward)*forward;
+                }if(self.v.dot(&rightward).abs() > PLAYER_SPEED){
+                    *a -= a.dot(&rightward)*rightward;
+                }},
+            SpeedLimitType::IsotropicSoft => {
+                // Limit asymptotic velocity under constant acceleration
+                // in any direction, but still allow speed to increase
+                // while changing direction:
+                let v_dot_a = self.v.dot(&a);
+                if(v_dot_a/a.norm() > PLAYER_SPEED){
+                    *a -= v_dot_a*self.v/self.v.norm_squared();
+                }},
+        } // match
+    }
     pub fn update_velocity_and_position(self: &mut Player<'a>, dt: i32){
-        let ay = ((self.u-self.d) as f32)*PLAYER_ACCEL;
-        let ax = ((self.r-self.l) as f32)*PLAYER_ACCEL;
+        let accel_scale = if(self.z == 0.0){1.0}else{PLAYER_AIR_CONTROL};
+        let accel = accel_scale*PLAYER_ACCEL;
+        let ay = ((self.u-self.d) as f32)*accel;
+        let ax = ((self.r-self.l) as f32)*accel;
         let nyaw = -self.yaw;
         let mut a = SVector::<f32,2>::new(ax*nyaw.cos() - ay*nyaw.sin(),
                                           ax*nyaw.sin() + ay*nyaw.cos());
 
-        // If the player is exceeding the speed limit, remove the component
-        // of acceleration in the direction of the current velocity if it
-        // is positive.
-        let norm_v = self.v.norm();
-        if(norm_v > PLAYER_SPEED){
-            let v_hat = self.v/norm_v;
-            let a_dot_v_hat = a.dot(&v_hat);
-            if(a_dot_v_hat > 0.0){
-                a -= a_dot_v_hat*v_hat;
-            }
-        }
+        //self.enforce_speed_limit(&mut a, SpeedLimitType::Strict);
+        self.enforce_speed_limit(&mut a, SpeedLimitType::StraferunSoft);
+        //self.enforce_speed_limit(&mut a, SpeedLimitType::IsotropicSoft);
+
+        self.jump_if_desired();
+
         // Apply acceleration:
         self.v += (dt as f32)*a;
+        self.vz -= (dt as f32)*GRAV_ACCEL;
         // Implicit exponential integrator for frictional damping:
-        self.v *= (-(dt as f32)/MOVE_DAMP_TIMESCALE).exp();
+        if(self.z <= 0.0){
+            self.v *= (-(dt as f32)/MOVE_DAMP_TIMESCALE).exp();
+        }
         // Integrate position:
         self.x += (dt as f32)*self.v;
+        self.z += (dt as f32)*self.vz;
+
+        // Correct for collision with floor:
+        if(self.z < 0.0){
+            self.z = 0.0;
+            self.vz = 0.0;
+        }
     }
 
     pub fn collide_with_wall(self: &mut Player<'a>, wall: &Wall){
@@ -604,7 +670,8 @@ impl<'a> Monster<'a> {
         } // end if dead
         let x_diff = self.x - target.x;
         let norm_x_diff = x_diff.norm();
-        if(norm_x_diff < PLAYER_R){
+        let norm_z_diff = (self.z - target.z).abs();
+        if((norm_x_diff < PLAYER_R) && (norm_z_diff < PLAYER_R)){
             self.die();
             let n = x_diff/norm_x_diff;
             target.score -= SCORE_CHANGE;
