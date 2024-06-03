@@ -30,7 +30,8 @@ static H: u32 = 480;
 static FAR_Z: f32 = std::f32::MAX;
 static NEAR_Z: f32 = 100.0;
 static WALL_H: i32 = 480;
-static FLOOR_W: f32 = 4320.0;
+//static FLOOR_W: f32 = 4320.0;
+static FLOOR_W: f32 = (WALL_H as f32);
 static PLAYER_SPEED: f32 = 1.2;
 static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
@@ -144,43 +145,45 @@ fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
     let pp0 = transform_for_player(&p0, &player);
     let pp1 = transform_for_player(&p1, &player);
     let pp2 = transform_for_player(&p2, &player);
-    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer, false);
+    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer,
+                         false, false);
 }
 
 static EPS: f32 = 1e-8;
 fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
                         x2: &SVector<f32,3>, texture: &Surface,
                         screen: &Surface, z_buffer: &mut DMatrix<f32>,
-                        transparent: bool){
+                        transparent: bool, tile: bool){
     let v1 = x1 - x0;
     let v2 = x2 - x0;
     let x3 = x0 + v1 + v2;
 
     // Completely skip rendering surfaces in some easily-detected cases:
-
-    // All vertices behind camera:
-    if((x0[2] <= 0.0) && (x1[2] <= 0.0) && (x2[2] <= 0.0) && (x3[2] <= 0.0))
-    {return;}
-    // All vertices to right of frustum:
-    if((x0[0] > 0.0 && x0[2] <= x0[0]) &&
-       (x1[0] > 0.0 && x1[2] <= x1[0]) &&
-       (x2[0] > 0.0 && x2[2] <= x2[0]) &&
-       (x3[0] > 0.0 && x3[2] <= x3[0])){return;}
-    // All vertices to left of frustum:
-    if((x0[0] < 0.0 && x0[2] <= -x0[0]) &&
-       (x1[0] < 0.0 && x1[2] <= -x1[0]) &&
-       (x2[0] < 0.0 && x2[2] <= -x2[0]) &&
-       (x3[0] < 0.0 && x3[2] <= -x3[0])){return;}
-    // All vertices above frustum:
-    if((x0[1] > 0.0 && x0[2] <= x0[1]) &&
-       (x1[1] > 0.0 && x1[2] <= x1[1]) &&
-       (x2[1] > 0.0 && x2[2] <= x2[1]) &&
-       (x3[1] > 0.0 && x3[2] <= x3[1])){return;}
-    // All vertices below frustum:
-    if((x0[1] < 0.0 && x0[2] <= -x0[1]) &&
-       (x1[1] < 0.0 && x1[2] <= -x1[1]) &&
-       (x2[1] < 0.0 && x2[2] <= -x2[1]) &&
-       (x3[1] < 0.0 && x3[2] <= -x3[1])){return;}
+    if(!tile){
+        // All vertices behind camera:
+        if((x0[2] <= 0.0) && (x1[2] <= 0.0) && (x2[2] <= 0.0) && (x3[2] <= 0.0))
+        {return;}
+        // All vertices to right of frustum:
+        if((x0[0] > 0.0 && x0[2] <= x0[0]) &&
+           (x1[0] > 0.0 && x1[2] <= x1[0]) &&
+           (x2[0] > 0.0 && x2[2] <= x2[0]) &&
+           (x3[0] > 0.0 && x3[2] <= x3[0])){return;}
+        // All vertices to left of frustum:
+        if((x0[0] < 0.0 && x0[2] <= -x0[0]) &&
+           (x1[0] < 0.0 && x1[2] <= -x1[0]) &&
+           (x2[0] < 0.0 && x2[2] <= -x2[0]) &&
+           (x3[0] < 0.0 && x3[2] <= -x3[0])){return;}
+        // All vertices above frustum:
+        if((x0[1] > 0.0 && x0[2] <= x0[1]) &&
+           (x1[1] > 0.0 && x1[2] <= x1[1]) &&
+           (x2[1] > 0.0 && x2[2] <= x2[1]) &&
+           (x3[1] > 0.0 && x3[2] <= x3[1])){return;}
+        // All vertices below frustum:
+        if((x0[1] < 0.0 && x0[2] <= -x0[1]) &&
+           (x1[1] < 0.0 && x1[2] <= -x1[1]) &&
+           (x2[1] < 0.0 && x2[2] <= -x2[1]) &&
+           (x3[1] < 0.0 && x3[2] <= -x3[1])){return;}
+    }
 
     let mut A = SMatrix::<f32,3,3>::new(-v1[0], -v2[0], 0.0,
                                         -v1[1], -v2[1], 0.0,
@@ -188,6 +191,8 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
     let mut uvt = SVector::<f32,3>::new(0.0, 0.0, 0.0);
     let t_w = texture.width() as f32;
     let t_h = texture.height() as f32;
+    let t_w_i = texture.width() as i32;
+    let t_h_i = texture.height() as i32;
 
     // Compute bounding box in screen-space:
 
@@ -201,7 +206,8 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
     // FIXME: Find a smarter way to bound screen space when some vertices
     // are behind the camera; these formulas only work if all z-coordinates
     // are positive.
-    if((x0[2] > 0.0) && (x1[2] > 0.0) && (x2[2] > 0.0) && (x3[2] > 0.0)){
+    if((!tile) && (x0[2] > 0.0) && (x1[2] > 0.0)
+       && (x2[2] > 0.0) && (x3[2] > 0.0)){
         let i0 = ((W2 as f32)*x0[0]/x0[2]) as i32;
         let i1 = ((W2 as f32)*x1[0]/x1[2]) as i32;
         let i2 = ((W2 as f32)*x2[0]/x2[2]) as i32;
@@ -231,13 +237,20 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
             let u = uvt[0];
             let v = uvt[1];
             let t = uvt[2];
-            if((u <= 0.0) || (v <= 0.0) || (u >= 1.0) || (v >= 1.0)
-               || (t <= 0.0)){continue;}
+            if((!tile) && ((u <= 0.0) || (v <= 0.0)
+                           || (u >= 1.0) || (v >= 1.0))){continue;}
+            if(t <= 0.0){continue;}
             let W2_i = (W2 as i32) + i;
             let z = x0[2] + u*v1[2] + v*v2[2];
             if(z > z_buffer[(H2_j as usize,W2_i as usize)]){continue;}
-            let t_col = (u*t_w) as i32;
-            let t_row = (v*t_h) as i32;
+            let mut t_col = (u*t_w) as i32;
+            let mut t_row = (v*t_h) as i32;
+            if(tile){
+                t_col = t_col % t_w_i;
+                t_row = t_row % t_h_i;
+                if(t_col < 0){t_col += t_w_i;}
+                if(t_row < 0){t_row += t_h_i;}
+            }
             if(transfer_pixel(texture, screen, t_col, t_row, W2_i, H2_j,
                               transparent)){
                 z_buffer[(H2_j as usize, W2_i as usize)] = z;
@@ -261,7 +274,7 @@ fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
     let x0 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans-0.5*s_h, z_trans);
     let x1 = SVector::<f32,3>::new(x_trans+0.5*s_w, y_trans-0.5*s_h, z_trans);
     let x2 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans+0.5*s_h, z_trans);
-    render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true);
+    render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true, false);
 }
 
 fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
@@ -274,7 +287,7 @@ fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
     let p0 = transform_for_player(&x0, &player);
     let p1 = transform_for_player(&x1, &player);
     let p2 = transform_for_player(&x2, &player);
-    render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, false);
+    render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, false, true);
 }
 
 fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
