@@ -21,6 +21,9 @@ use nalgebra::DMatrix;
 use nalgebra::SVector;
 
 use rand::Rng;
+use rand::rngs::ThreadRng;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 use std::cmp::max;
 use std::cmp::min;
@@ -61,7 +64,6 @@ static SCORE_BAR_FRAC: f32 = 0.025;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
 
 static PI: f32 = std::f32::consts::PI;
-
 
 // Derived constants:
 static W2: u32 = W/2;
@@ -492,8 +494,8 @@ struct Monster<'a> {
 
 impl<'a> Monster<'a> {
     pub fn new(sprite: &'a Surface<'a>, dead_sprite: &'a Surface<'a>,
-               x: SVector<f32,2>) -> Monster<'a> {
-        let bob_phase = rand::thread_rng().gen_range(0..100) as f32;
+               x: SVector<f32,2>, rng: &mut SmallRng) -> Monster<'a> {
+        let bob_phase = rng.gen_range(0..100) as f32;
         Monster{sprite: sprite, dead_sprite: dead_sprite, x: x,
                 v: SVector::<f32,2>::new(0.0,0.0),
                 bob_phase: bob_phase,
@@ -511,14 +513,13 @@ impl<'a> Monster<'a> {
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
     pub fn think_and_move(self: &mut Monster<'a>, target: &mut Player,
-                          level: &Level, dt: i32){
+                          level: &Level, dt: i32, rng: &mut SmallRng){
         // If dead, countdown until respawning.
         if(self.dead_timer > 0){
             self.dead_timer -= dt;
             if(self.dead_timer <= 0){
                 self.dead_timer = 0;
-                let spawn_index
-                    = rand::thread_rng().gen_range(0..(level.spawns.len()));
+                let spawn_index = rng.gen_range(0..(level.spawns.len()));
                 self.x = level.spawns[spawn_index];
             }
             return;
@@ -666,9 +667,10 @@ impl<'a> Level<'a> {
         self.walls.push(Wall::new(wall_type, start, end, constant, texture));
     }
 
-    pub fn add_pillar(self: &mut Level<'a>, x: SVector<f32,2>){
+    pub fn add_pillar(self: &mut Level<'a>, x: SVector<f32,2>,
+                      rng: &mut SmallRng){
         // Index of random corner to be moved to center:
-        let move_index = 2*(rand::thread_rng().gen_range(0..4));
+        let move_index = 2*(rng.gen_range(0..4));
         let mut pts = Vec::<SVector<f32,2>>::new();
         // Generate points in order:
         let WHF = WALL_H as f32;
@@ -701,23 +703,25 @@ impl<'a> Level<'a> {
         } // i
     }
 
-    pub fn add_walls_randomly(self: &mut Level<'a>){
+    pub fn add_walls_randomly(self: &mut Level<'a>, rng: &mut SmallRng){
         self.walls = Vec::<Wall>::new();
         self.spawns = Vec::<SVector<f32,2>>::new();
         let mut last_col: i32 = -1;
         let mut col: i32 = -1;
         let mut factor: f32 = 6.0;
         let WHF = WALL_H as f32;
+        // Interior pillars:
         for i in 0..3 {
             loop {
-                col = rand::thread_rng().gen_range(0..4) as i32;
+                col = rng.gen_range(0..4) as i32;
                 if(col != last_col){break;}
             } // loop
             last_col = col;
             if(i > 1){factor = 2.0;}
             self.add_pillar(SVector::<f32,2>::new(2.0*(col as f32)*WHF,
-                                                  factor*WHF));
+                                                  factor*WHF), rng);
         } // i
+        // Exterior walls:
         for i in 0..9 {
             self.add_wall(WallType::ConstantX, (i as f32)*WHF,
                           ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
@@ -769,24 +773,26 @@ impl<'a> Game<'a> {
                sky_texture: &'a Surface<'a>,
                monster_sprite: &'a Surface<'a>,
                monster_dead_sprite: &'a Surface<'a>,
-               projectile_sprite: &'a Surface<'a>) -> Game<'a>{
+               projectile_sprite: &'a Surface<'a>,
+               rng: &mut SmallRng) -> Game<'a>{
         let mut new_game = Game{level: Level::<'a>::new(inner_wall_texture,
                                                         outer_wall_texture,
                                                         floor_texture,
                                                         sky_texture),
                                 player: Player::<'a>::new(projectile_sprite),
                                 monsters: Vec::<Monster<'a>>::new()};
-        new_game.level.add_walls_randomly();
+        new_game.level.add_walls_randomly(rng);
         for spawn in &new_game.level.spawns {
             new_game.monsters.push(Monster::new(monster_sprite,
                                                 monster_dead_sprite,
-                                                *spawn));
+                                                *spawn, rng));
         } // i
         new_game.player.x = PLAYER_START;
         return new_game;
     }
 
-    pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump)
+    pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump,
+                        rng: &mut SmallRng)
                         -> GameState {
 
         // Check for quitting, winning, or losing the current game.
@@ -798,7 +804,7 @@ impl<'a> Game<'a> {
         self.player.update_velocity_and_position(dt);
         self.level.collide_player_with_walls(&mut self.player);
         for mut monster in &mut self.monsters {
-            monster.think_and_move(&mut self.player, &self.level, dt);
+            monster.think_and_move(&mut self.player, &self.level, dt, rng);
         }
         collide_monsters_with_each_other(&mut self.monsters);
         collide_monsters_with_player_projectile(&mut self.monsters,
@@ -885,9 +891,12 @@ fn main() -> Result<(), String> {
     let projectile_sprite: Surface
         = load_image_with_format("data/projimg.bmp".to_string(), format);
 
+    let mut level_seed: u64 = 0;
+    let mut rng = SmallRng::seed_from_u64(level_seed);
+
     let mut game = Game::new(&outer_wall_texture, &inner_wall_texture,
                              &floor_texture, &sky_texture, &monster_sprite,
-                             &monster_dead_sprite, &projectile_sprite);
+                             &monster_dead_sprite, &projectile_sprite, &mut rng);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -898,19 +907,24 @@ fn main() -> Result<(), String> {
     // Main game loop:
     loop {
         let mut t_start: i32 = timer.ticks() as i32;
-        let game_state = game.update_state(dt, &mut event_pump);
+        let game_state = game.update_state(dt, &mut event_pump, &mut rng);
         match game_state {
             GameState::Quit => break,
             GameState::Win
-                => {game = Game::new(&outer_wall_texture, &inner_wall_texture,
+                => {// Restart with a new random seed after winning:
+                    level_seed += 1;
+                    rng = SmallRng::seed_from_u64(level_seed);
+                    game = Game::new(&outer_wall_texture, &inner_wall_texture,
                                      &floor_texture, &sky_texture,
                                      &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite);},
+                                     &projectile_sprite, &mut rng);},
             GameState::Lose
-                => {game = Game::new(&outer_wall_texture, &inner_wall_texture,
+                => {// Retry with the same random seed after losing:
+                    rng = SmallRng::seed_from_u64(level_seed);
+                    game = Game::new(&outer_wall_texture, &inner_wall_texture,
                                      &floor_texture, &sky_texture,
                                      &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite);},
+                                     &projectile_sprite, &mut rng);},
             GameState::Continue => {},
         }
         game.render(&mut draw_surf, &mut z_buffer);
