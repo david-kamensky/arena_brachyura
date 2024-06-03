@@ -87,71 +87,16 @@ fn render_wall(x1: f32, z1: f32, x2: f32, z2: f32, texture: &Surface,
     render_parallelogram(&p0, &p1, &p2, texture, screen, z_buffer, false);
 }
 
-fn render_wall_old(x1: f32, z1: f32, x2: f32, z2: f32, texture: &Surface,
-                   screen: &Surface, z_buff: &mut DMatrix<f32>){
-
-    // Skip walls totally behind player:
-    if((z1 < NEAR_Z) && (z2 < NEAR_Z)){return;}
-
-    // System `A*X = B` solved for `X = [s,t]`, where `s` parameterizes the
-    // wall (in range (0,1)) and `t > 0` parameterizes a column of pixels' ray.
-    let mut A = SMatrix::<f32,2,2>::new(x1-x2, 0.0, z1-z2, 1.0);
-    let mut B = SVector::<f32,2>::new(x1, z1);
-    let mut X = SVector::<f32,2>::new(0.0,0.0);
-
-    // Iterate over screen columns covered by wall:
-    // FIXME: Tighter bound is to solve for intersection of wall with near-z plane.
-    let col1 = (((W2 as f32)*x1/f32::max(z1,NEAR_Z)) as i32);
-    let col2 = (((W2 as f32)*x2/f32::max(z2,NEAR_Z)) as i32);
-    let start_col = max(min(col1, col2), -(W2 as i32));
-    let stop_col = min(max(col1, col2), (W2 as i32));
-    for i in start_col..stop_col {
-        // Set up and solve system for pixel column's ray with wall:
-        A[(0,1)] = (i as f32)/(W2 as f32);
-
-        // Solve with pseudo-inverse to avoid error on singularity.
-        // X = A.pseudo_inverse(0.0).unwrap()*B;
-        // let s = X[0];
-        // let t = X[1];
-
-        // NOTE: No clear difference in performance vs. pseudoinverse method.
-        let detA = A.determinant();
-        if(detA == 0.0){continue;} // Wall is viewed edge-on.
-        let s = (A[(1,1)]*x1 - A[(0,1)]*z1)/detA;
-        let t = (-A[(1,0)]*x1 + A[(0,0)]*z1)/detA;
-
-        // Use parametric intersection to compute texture column:
-        if((s < 0.0) || (s > 1.0) || (t < 0.0)){continue;}
-        let t_col = s*(texture.width() as f32);
-
-        // Check and maybe update the z-buffer:
-        let global_z = s*(z2 - z1) + z1;
-        let W2_i =  (W2 as usize) + (i as usize);
-
-        // Find vertical endpoints (top to bottom) on the screen:
-        let y1s = 0.25*(WALL_H as f32)*(W as f32)/global_z;
-        let y2s = -y1s;
-        let start_y = if(y1s > (-(H2 as f32))){y1s as i32}else{-(H2 as i32)};
-        let stop_y = if(y2s < (H2 as f32)){y2s as i32}else{(H2 as i32)-1};
-
-        // For each pixel in the screen column, get its associate texture row
-        // through an affine mapping:
-        let t_h = texture.height() as f32;
-        let t_step = t_h/(y1s - y2s);
-        let mut t_row = (y1s - (start_y as f32))/(y1s - y2s)*t_h - 0.5*t_step;
-        let mut j = start_y;
-        while(j >= stop_y){
-            t_row += t_step;
-            let H2_j = (H2 as i32)-j;
-            j -= 1;
-            if(H2_j < 0 || H2_j >= (H as i32)){continue;}
-            if(global_z <= NEAR_Z || global_z > z_buff[(H2_j as usize,W2_i)]){continue;}
-            z_buff[(H2_j as usize,W2_i)] = global_z;
-
-            transfer_pixel(texture, screen, t_col as i32, t_row as i32,
-                           W2_i as i32, H2_j as i32, false);
-        } // j
-    } // i
+fn transform_and_render_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
+                             texture: &Surface,
+                             screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
+    let p0 = SVector::<f32,3>::new(x1, y1, 0.5*(WALL_H as f32));
+    let p1 = SVector::<f32,3>::new(x2, y2, 0.5*(WALL_H as f32));
+    let p2 = SVector::<f32,3>::new(x1, y1, -0.5*(WALL_H as f32));
+    let pp0 = transform_for_player(&p0, &player);
+    let pp1 = transform_for_player(&p1, &player);
+    let pp2 = transform_for_player(&p2, &player);
+    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer, false);
 }
 
 static EPS: f32 = 1e-8;
@@ -248,73 +193,49 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f
     } // i
 }
 
-fn draw_sprite(source: &Surface, dest: &mut Surface, x: f32, z: f32, scale: f32,
-               above_ground: f32, z_buffer: &mut DMatrix<f32>){
+fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface, player: &Player,
+                             x: f32, y: f32, scale: f32,
+                             above_ground: f32, z_buffer: &mut DMatrix<f32>){
     let s_w = (source.width() as f32)*scale;
     let s_h = (source.height() as f32)*scale;
-    let y = 0.5*(WALL_H as f32) - 0.5*s_h - above_ground;
-    let x0 = SVector::<f32,3>::new(x-0.5*s_w, y-0.5*s_h, z);
-    let x1 = SVector::<f32,3>::new(x+0.5*s_w, y-0.5*s_h, z);
-    let x2 = SVector::<f32,3>::new(x-0.5*s_w, y+0.5*s_h, z);
+    let z = 0.5*(WALL_H as f32) - 0.5*s_h - above_ground;
+    let xyz = SVector::<f32,3>::new(x, y, z);
+    let xyz_trans = transform_for_player(&xyz, player);
+    let x_trans = xyz_trans[0];
+    let y_trans = xyz_trans[1];
+    let z_trans = xyz_trans[2];
+    // Define surface to always face player after transforming center point:
+    let x0 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans-0.5*s_h, z_trans);
+    let x1 = SVector::<f32,3>::new(x_trans+0.5*s_w, y_trans-0.5*s_h, z_trans);
+    let x2 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans+0.5*s_h, z_trans);
     render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true);
 }
 
-fn draw_floor_new(source: &Surface, dest: &mut Surface, vx: f32, vy: f32,
-                  x_low: f32, x_high: f32, y_low: f32, y_high: f32, yaw: f32,
-                  z_buffer: &mut DMatrix<f32>){
-
-    let x0 = SVector::<f32,2>::new(x_low, y_low);
-    let x1 = SVector::<f32,2>::new(x_high, y_low);
-    let x2 = SVector::<f32,2>::new(x_low, y_high);
-    let mut rx00: f32 = 0.0;
-    let mut rx01: f32 = 0.0;
-    viewing_transform(x0[0], x0[1], &mut rx00, &mut rx01, vx, vy, yaw.sin(), yaw.cos());
-    let mut rx10: f32 = 0.0;
-    let mut rx11: f32 = 0.0;
-    viewing_transform(x1[0], x1[1], &mut rx10, &mut rx11, vx, vy, yaw.sin(), yaw.cos());
-    let mut rx20: f32 = 0.0;
-    let mut rx21: f32 = 0.0;
-    viewing_transform(x2[0], x2[1], &mut rx20, &mut rx21, vx, vy, yaw.sin(), yaw.cos());
-    let p0 = SVector::<f32,3>::new(rx00, 0.5*(WALL_H as f32), rx01);
-    let p1 = SVector::<f32,3>::new(rx10, 0.5*(WALL_H as f32), rx11);
-    let p2 = SVector::<f32,3>::new(rx20, 0.5*(WALL_H as f32), rx21);
+fn transform_and_draw_floor(source: &Surface, dest: &mut Surface, player: &Player,
+              x_low: f32, x_high: f32, y_low: f32, y_high: f32,
+              z_buffer: &mut DMatrix<f32>){
+    let x0 = SVector::<f32,3>::new(x_low, y_low, -0.5*(WALL_H as f32));
+    let x1 = SVector::<f32,3>::new(x_high, y_low, -0.5*(WALL_H as f32));
+    let x2 = SVector::<f32,3>::new(x_low, y_high, -0.5*(WALL_H as f32));
+    let p0 = transform_for_player(&x0, &player);
+    let p1 = transform_for_player(&x1, &player);
+    let p2 = transform_for_player(&x2, &player);
     render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, false);
 }
 
-fn draw_floor(source: &Surface, dest: &mut Surface, vx: f32, vz: f32,
-              x1_: f32, x2_: f32, z1_: f32, z2_: f32, yaw: f32){
-    let s_w = source.width();
-    let s_h = source.height();
-    let sin_yaw = (-yaw).sin();
-    let cos_yaw = (-yaw).cos();
-    let x1 = x1_ - vx;
-    let z1 = z1_ - vz;
-    let x2 = x2_ - vx;
-    let z2 = z2_ - vz;
-    let x_diff = x2 - x1;
-    let z_diff = z2 - z1;
-    // Iterate over screen rows:
-    for i in (-(H2 as i32))..0 {
-        // Iterate over screen columns:
-        for j in (-(W2 as i32))..(W2 as i32) {
-            let z = -0.5*(W2 as f32)*(WALL_H as f32)/(i as f32);
-            let x = z*(j as f32)/(W2 as f32);
-            let nx = x*cos_yaw - z*sin_yaw;
-            let nz = x*sin_yaw + z*cos_yaw;
-            if((nz < z1) || (nz > z2) || (nx < x1) || (nx > x2)){continue;}
-            let t_col = max(0, ((s_w as f32)*(nx - x1)/x_diff) as i32);
-            let t_row = max(0, ((s_h as f32)*(nz - z1)/z_diff) as i32);
-            transfer_pixel(source, dest, t_col, t_row, (W2 as i32)+j, (H2 as i32)-i, false);
-        } // j
-    } // i
-}
-
-fn viewing_transform(x: f32, y: f32, rx: &mut f32, ry: &mut f32,
-                     cam_x: f32, cam_y: f32, sin_yaw: f32, cos_yaw: f32){
-    let x_diff = x - cam_x;
-    let y_diff = y - cam_y;
-    *rx = x_diff*cos_yaw - y_diff*sin_yaw;
-    *ry = x_diff*sin_yaw + y_diff*cos_yaw;
+fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
+    let x_trans = SVector::<f32,3>::new(x[0] - player.x, -x[2], x[1] - player.y);
+    let cos_yaw = player.yaw.cos();
+    let sin_yaw = player.yaw.sin();
+    let x_yaw = SVector::<f32,3>::new(x_trans[0]*cos_yaw - x_trans[2]*sin_yaw,
+                                      x_trans[1],
+                                      x_trans[0]*sin_yaw + x_trans[2]*cos_yaw);
+    // return x_yaw;
+    let cos_pitch = player.pitch.cos();
+    let sin_pitch = player.pitch.sin();
+    return SVector::<f32,3>::new(x_yaw[0],
+                                 x_yaw[1]*cos_pitch - x_yaw[2]*sin_pitch,
+                                 x_yaw[1]*sin_pitch + x_yaw[2]*cos_pitch);
 }
 
 struct Player {
@@ -323,6 +244,7 @@ struct Player {
     pub vx: f32,
     pub vy: f32,
     pub yaw: f32,
+    pub pitch: f32,
     pub l: i32,
     pub r: i32,
     pub u: i32,
@@ -337,6 +259,7 @@ impl Player {
             vx: 0.0,
             vy: 0.0,
             yaw: 0.0,
+            pitch: 0.0,
             l: 0,
             r: 0,
             u: 0,
@@ -348,7 +271,11 @@ impl Player {
             match event {
                 Event::Quit{..} | Event::KeyDown{keycode: Some(Keycode::Escape), .. }
                 => return true,
-                Event::MouseMotion{xrel, .. } => self.yaw += (xrel as f32)*SENSITIVITY,
+                Event::MouseMotion{xrel, yrel, .. }
+                => {self.yaw += (xrel as f32)*SENSITIVITY;
+                    self.pitch = f32::max(-0.5*std::f32::consts::PI,
+                                          f32::min(0.5*std::f32::consts::PI,
+                                                   self.pitch + (yrel as f32)*SENSITIVITY))},
                 Event::KeyDown{keycode: Some(Keycode::A), .. } => self.l = 1,
                 Event::KeyDown{keycode: Some(Keycode::D), .. } => self.r = 1,
                 Event::KeyDown{keycode: Some(Keycode::W), .. } => self.u = 1,
@@ -389,7 +316,6 @@ struct Wall<'a> {
     pub y1: f32,
     pub y2: f32,
     pub wall_type: WallType,
-    //pub texture_type: TextureType,
     pub texture: &'a Surface<'a>,
 }
 
@@ -428,10 +354,8 @@ impl<'a> Sprite<'a> {
 
     pub fn render(self: &Sprite<'a>, player: &Player, sin_yaw: f32, cos_yaw: f32,
                   dest: &mut Surface, z_buffer: &mut DMatrix<f32>){
-        let mut rx = 0.0;
-        let mut ry = 0.0;
-        viewing_transform(self.x, self.y, &mut rx, &mut ry, player.x, player.y, sin_yaw, cos_yaw);
-        draw_sprite(self.img, dest, rx, ry, self.scale, self.above_ground, z_buffer);
+        transform_and_draw_sprite(self.img, dest, player, self.x, self.y,
+                                  self.scale, self.above_ground, z_buffer);
     }
 }
 
@@ -448,19 +372,11 @@ impl<'a> Level<'a> {
                     constant: f32, texture: &'a Surface<'a>){
         self.walls.push(Wall::new(wall_type, start, end, constant, texture));
     }
-    pub fn render_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, player: &Player){
-        let sin_yaw: f32 = player.yaw.sin();
-        let cos_yaw: f32 = player.yaw.cos();
-        let mut rx1: f32 = 0.0;
-        let mut rx2: f32 = 0.0;
-        let mut ry1: f32 = 0.0;
-        let mut ry2: f32 = 0.0;
+    pub fn render_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>,
+                            player: &Player){
         for w in self.walls.iter() {
-            viewing_transform(w.x1, w.y1, &mut rx1, &mut ry1,
-                              player.x, player.y, sin_yaw, cos_yaw);
-            viewing_transform(w.x2, w.y2, &mut rx2, &mut ry2,
-                              player.x, player.y, sin_yaw, cos_yaw);
-            render_wall(rx1, ry1, rx2, ry2, w.texture, dest, z_buffer)
+            transform_and_render_wall(player, w.x1, w.y1, w.x2, w.y2, w.texture,
+                                      dest, z_buffer);
         } // w
     } // render_all_walls
 }
@@ -563,8 +479,8 @@ fn main() -> Result<(), String> {
             }
         }
 
-        draw_floor_new(&floor_texture, &mut draw_surf, player.x, player.y,
-                       0.0, 4320.0, 0.0, 4320.0, player.yaw, &mut z_buffer);
+        transform_and_draw_floor(&floor_texture, &mut draw_surf, &player,
+                   0.0, 4320.0, 0.0, 4320.0, &mut z_buffer);
 
         // Render the level's walls:
         level.render_all_walls(&mut draw_surf, &mut z_buffer, &player);
