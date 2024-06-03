@@ -30,6 +30,7 @@ use std::cmp::min;
 use std::ffi::c_void;
 use std::vec::Vec;
 use std::process::exit;
+use std::fs;
 
 // Some global constants:
 static W: u32 = 640;
@@ -68,6 +69,7 @@ static SCORE_DECAY_RATE: f32 = 0.00004;
 static SCORE_START: f32 = 0.5;
 static SCORE_BAR_FRAC: f32 = 0.025;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
+static DATA_ROOT: &str = "data/";
 
 static PI: f32 = std::f32::consts::PI;
 
@@ -428,10 +430,7 @@ struct Player<'a> {
 }
 
 impl<'a> Player<'a> {
-    fn new(projectile_sprite: &'a Surface<'a>,
-           projectile_splash_sprite: &'a Surface<'a>,
-           gun_sprite: &'a Surface<'a>,
-           gun_ready_sprite: &'a Surface <'a>,) -> Player<'a> {
+    fn new(texture_set: &'a TextureSet<'a>) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
                v: SVector::<f32,2>::new(0.0,0.0),
                yaw: 0.0,
@@ -440,10 +439,11 @@ impl<'a> Player<'a> {
                r: 0,
                u: 0,
                d: 0,
-               projectile: Projectile::new(projectile_sprite,
+               projectile: Projectile::new(&texture_set.projectile_sprite,
+                                           &texture_set.
                                            projectile_splash_sprite),
-               gun_sprite: gun_sprite,
-               gun_ready_sprite: gun_ready_sprite,
+               gun_sprite: &texture_set.gun_sprite,
+               gun_ready_sprite: &texture_set.gun_ready_sprite,
                score: SCORE_START}
     }
     pub fn handle_input(self: &mut Player<'a>,
@@ -570,10 +570,11 @@ struct Monster<'a> {
 }
 
 impl<'a> Monster<'a> {
-    pub fn new(sprite: &'a Surface<'a>, dead_sprite: &'a Surface<'a>,
+    pub fn new(texture_set: &'a TextureSet<'a>,
                x: SVector<f32,2>, rng: &mut SmallRng) -> Monster<'a> {
         let bob_phase = rng.gen_range(0..100) as f32;
-        Monster{sprite: sprite, dead_sprite: dead_sprite, x: x,
+        Monster{sprite: &texture_set.monster_sprite,
+                dead_sprite: &texture_set.monster_dead_sprite, x: x,
                 v: SVector::<f32,2>::new(0.0,0.0),
                 bob_phase: bob_phase,
                 z: BOB_AMPLITUDE*bob_phase.sin(),
@@ -709,6 +710,19 @@ impl<'a> TextureSet<'a> {
     }
 }
 
+fn parse_texture_list(list_filename: String) -> Vec<String>{
+    let mut list = Vec::<String>::new();
+    let list_file_string: String = fs::read_to_string(list_filename).unwrap();
+    let lines = list_file_string.split("\n");
+    for line in lines {
+        if(line.len() > 0){
+            list.push(line.to_string());
+            println!("Found texture set '{}'", line);
+        }
+    }
+    return list;
+}
+
 enum WallType {
     ConstantX,
     ConstantY,
@@ -770,16 +784,13 @@ struct Level<'a> {
 }
 
 impl<'a> Level<'a> {
-    pub fn new(inner_wall_texture: &'a Surface<'a>,
-               outer_wall_texture: &'a Surface<'a>,
-               floor_texture: &'a Surface<'a>,
-               sky_texture: &'a Surface<'a>,) -> Level<'a> {
+    pub fn new(texture_set: &'a TextureSet<'a>) -> Level<'a> {
         Level{walls: Vec::<Wall>::new(),
               spawns: Vec::<SVector<f32,2>>::new(),
-              inner_wall_texture: inner_wall_texture,
-              outer_wall_texture: outer_wall_texture,
-              floor_texture: floor_texture,
-              sky_texture: sky_texture}
+              inner_wall_texture: &texture_set.inner_wall_texture,
+              outer_wall_texture: &texture_set.outer_wall_texture,
+              floor_texture: &texture_set.floor_texture,
+              sky_texture: &texture_set.sky_texture}
     }
     pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
                     start: f32, end: f32,
@@ -890,20 +901,12 @@ impl<'a> Game<'a> {
     pub fn new(texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
         let mut new_game
-            = Game{level: Level::<'a>::new(&texture_set.inner_wall_texture,
-                                           &texture_set.outer_wall_texture,
-                                           &texture_set.floor_texture,
-                                           &texture_set.sky_texture),
-                   player: Player::<'a>::new(&texture_set.projectile_sprite,
-                                             &texture_set.projectile_splash_sprite,
-                                             &texture_set.gun_sprite,
-                                             &texture_set.gun_ready_sprite),
+            = Game{level: Level::<'a>::new(texture_set),
+                   player: Player::<'a>::new(texture_set),
                    monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
         for spawn in &new_game.level.spawns {
-            new_game.monsters.push(
-                Monster::new(&texture_set.monster_sprite,
-                             &texture_set.monster_dead_sprite, *spawn, rng));
+            new_game.monsters.push(Monster::new(texture_set, *spawn, rng));
         } // i
         new_game.player.x = PLAYER_START;
         return new_game;
@@ -963,6 +966,10 @@ impl<'a> Game<'a> {
     }
 }
 
+fn data_filename(name: &str) -> String {
+    return (DATA_ROOT.to_owned()+name).to_string();
+}
+
 static FULLSCREEN: bool = true;
 fn main() -> Result<(), String> {
     let mut sdl_context = sdl2::init()?;
@@ -993,7 +1000,10 @@ fn main() -> Result<(), String> {
 
     let format = draw_surf.pixel_format_enum();
 
-    let texture_set = TextureSet::new("data".to_string(), format);
+    let texture_set_list = parse_texture_list(data_filename("texture_sets"));
+
+    let texture_set = TextureSet::new(data_filename(&texture_set_list[0]),
+                                      format);
 
     let mut level_seed: u64 = 0;
     let mut rng = SmallRng::seed_from_u64(level_seed);
