@@ -48,6 +48,7 @@ static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.7;
 static PL_PROJ_MAX_FLIGHT_TIME: i32 = 3000;
 static PL_PROJ_R: f32 = 50.0;
+static PL_GUN_SCREEN_FRAC: f32 = 0.2;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 static BOB_AMPLITUDE: f32 = 30.0;
@@ -58,7 +59,8 @@ static MONSTER_COLLISION_DAMP: f32 = 0.5;
 static MONSTER_COLLISION_ITERS: i32 = 7;
 static DEATH_TIME: i32 = 300;
 static SCORE_CHANGE: f32 = 0.1;
-static SCORE_DECAY_RATE: f32 = 0.00006;
+//static SCORE_DECAY_RATE: f32 = 0.00006;
+static SCORE_DECAY_RATE: f32 = 0.00004;
 static SCORE_START: f32 = 0.5;
 static SCORE_BAR_FRAC: f32 = 0.025;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
@@ -297,6 +299,35 @@ fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
     render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true, false);
 }
 
+// This is for rendering 2D HUD elements and updating the z-buffer to skip
+// any 3D geometry behind them.
+fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
+                  z_buffer: &mut DMatrix<f32>){
+    let w = rect.width() as f32;
+    let h = rect.height() as f32;
+    let s_w = source.width() as f32;
+    let s_h = source.height() as f32;
+    let x = rect.x() as f32;
+    let y = rect.y() as f32;
+    let i0 = max(rect.x() as i32, 0 as i32);
+    let i1 = min((x + w) as i32, W as i32);
+    let j0 = max(rect.y() as i32, 0 as i32);
+    let j1 = min((y + h) as i32, H as i32);
+    // Iterate over screen pixels covered by `rect` and transfer corresponding
+    // sprite pixels.
+    for j in j0..j1{
+        let s_y = (s_h*((j-j0) as f32)/h) as i32;
+        for i in i0..i1{
+            let s_x = (s_w*((i-i0) as f32)/w) as i32;
+            if(transfer_pixel(source, dest, s_x, s_y, i, j, true)){
+                // If the pixel is non-transparent, set the z-buffer to zero
+                // to block anything from rendering over the 2D sprite.
+                z_buffer[(j as usize,i as usize)] = 0.0;
+            } // if
+        } // i
+    } // j
+}
+
 fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
                             player: &Player, x_low: f32, x_high: f32,
                             y_low: f32, y_high: f32,
@@ -380,11 +411,13 @@ struct Player<'a> {
     pub u: i32,
     pub d: i32,
     pub projectile: Projectile<'a>,
+    pub gun_sprite: &'a Surface <'a>,
     pub score: f32,
 }
 
 impl<'a> Player<'a> {
-    fn new(projectile_sprite: &'a Surface<'a>) -> Player<'a> {
+    fn new(projectile_sprite: &'a Surface<'a>,
+           gun_sprite: &'a Surface<'a>) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
                v: SVector::<f32,2>::new(0.0,0.0),
                yaw: 0.0,
@@ -394,6 +427,7 @@ impl<'a> Player<'a> {
                u: 0,
                d: 0,
                projectile: Projectile::new(projectile_sprite),
+               gun_sprite: gun_sprite,
                score: SCORE_START}
     }
     pub fn handle_input(self: &mut Player<'a>,
@@ -437,9 +471,26 @@ impl<'a> Player<'a> {
         self.projectile.ready = false;
         self.projectile.flight_time = 0;
     }
-    pub fn render_projectile(self: &Player<'a>, dest: &mut Surface,
-                             z_buffer: &mut DMatrix<f32>){
-        if(self.projectile.ready){return;}
+    pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
+                                     z_buffer: &mut DMatrix<f32>){
+        // Width of gun image on screen:
+        let gun_screen_w = PL_GUN_SCREEN_FRAC*(W as f32);
+        // Scale height proportionally based on input image:
+        let gun_screen_h = (self.gun_sprite.height() as f32)*gun_screen_w
+            /(self.gun_sprite.width() as f32);
+        let gun_rect = Rect::new((W2 - ((0.5*gun_screen_w) as u32))
+                                 .try_into().unwrap(),
+                                 (H - (gun_screen_h as u32))
+                                 .try_into().unwrap(),
+                                 gun_screen_w as u32, gun_screen_h as u32);
+        // TODO: Have different gun sprites based on whether projectile is
+        // ready to fire.
+        if(self.projectile.ready){
+            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer);
+            return;
+        }else{
+            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer);
+        }
         transform_and_draw_sprite(self.projectile.sprite, dest,
                                   &self.projectile.x,
                                   2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
@@ -774,12 +825,14 @@ impl<'a> Game<'a> {
                monster_sprite: &'a Surface<'a>,
                monster_dead_sprite: &'a Surface<'a>,
                projectile_sprite: &'a Surface<'a>,
+               gun_sprite: &'a Surface<'a>,
                rng: &mut SmallRng) -> Game<'a>{
         let mut new_game = Game{level: Level::<'a>::new(inner_wall_texture,
                                                         outer_wall_texture,
                                                         floor_texture,
                                                         sky_texture),
-                                player: Player::<'a>::new(projectile_sprite),
+                                player: Player::<'a>::new(projectile_sprite,
+                                                          gun_sprite),
                                 monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
         for spawn in &new_game.level.spawns {
@@ -824,7 +877,7 @@ impl<'a> Game<'a> {
         for monster in &self.monsters {
             monster.render(draw_surf, &self.player, z_buffer);
         }
-        self.player.render_projectile(draw_surf, z_buffer);
+        self.player.render_gun_and_projectile(draw_surf, z_buffer);
 
         // Render the level's walls:
         self.level.draw_all_walls(draw_surf, z_buffer, &self.player);
@@ -875,13 +928,13 @@ fn main() -> Result<(), String> {
 
     let format = draw_surf.pixel_format_enum();
     let outer_wall_texture: Surface
-        = load_image_with_format("data/outer_wall_texture.bmp".to_string(),
+        = load_image_with_format("data/outer_wall_texture.png".to_string(),
                                  format);
     let inner_wall_texture: Surface
-        = load_image_with_format("data/inner_wall_texture.bmp".to_string(),
+        = load_image_with_format("data/inner_wall_texture.png".to_string(),
                                  format);
     let floor_texture: Surface
-        = load_image_with_format("data/floor.bmp".to_string(), format);
+        = load_image_with_format("data/floor.png".to_string(), format);
     let sky_texture: Surface
         = load_image_with_format("data/sky.png".to_string(), format);
     let monster_sprite: Surface
@@ -890,13 +943,16 @@ fn main() -> Result<(), String> {
         = load_image_with_format("data/deadimg.bmp".to_string(), format);
     let projectile_sprite: Surface
         = load_image_with_format("data/projimg.bmp".to_string(), format);
+    let gun_sprite: Surface
+        = load_image_with_format("data/gun.png".to_string(), format);
 
     let mut level_seed: u64 = 0;
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
     let mut game = Game::new(&outer_wall_texture, &inner_wall_texture,
                              &floor_texture, &sky_texture, &monster_sprite,
-                             &monster_dead_sprite, &projectile_sprite, &mut rng);
+                             &monster_dead_sprite, &projectile_sprite,
+                             &gun_sprite, &mut rng);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -917,14 +973,16 @@ fn main() -> Result<(), String> {
                     game = Game::new(&outer_wall_texture, &inner_wall_texture,
                                      &floor_texture, &sky_texture,
                                      &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite, &mut rng);},
+                                     &projectile_sprite, &gun_sprite,
+                                     &mut rng);},
             GameState::Lose
                 => {// Retry with the same random seed after losing:
                     rng = SmallRng::seed_from_u64(level_seed);
                     game = Game::new(&outer_wall_texture, &inner_wall_texture,
                                      &floor_texture, &sky_texture,
                                      &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite, &mut rng);},
+                                     &projectile_sprite, &gun_sprite,
+                                     &mut rng);},
             GameState::Continue => {},
         }
         game.render(&mut draw_surf, &mut z_buffer);
