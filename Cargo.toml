@@ -1,0 +1,12 @@
+[package]
+name = "arena_brachyura"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies.sdl2]
+version = "0.35"
+default-features = false
+features = ["image"]
+
+[dependencies.nalgebra]
+version = "0.32.5"
