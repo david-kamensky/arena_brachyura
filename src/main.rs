@@ -37,13 +37,15 @@ static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.3;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
+static PI: f32 = std::f32::consts::PI;
+
 
 // Derived constants:
 static W2: u32 = W/2;
 static H2: u32 = H/2;
 
-// Returns whether or not the pixel was actually transferred. (May skip for tranparency or
-// out-of-bounds.)
+// Returns whether or not the pixel was actually transferred.
+// (May skip for tranparency or out-of-bounds.)
 fn transfer_pixel(source: &Surface, dest: &Surface, sx: i32, sy: i32,
                   dx: i32, dy: i32, transparent: bool) -> bool {
 
@@ -57,8 +59,8 @@ fn transfer_pixel(source: &Surface, dest: &Surface, sx: i32, sy: i32,
     let dest_w = dest.width() as i32;
     let dest_h = dest.height() as i32;
 
-    if((dx >= 0)  &&  (dy >=  0)  &&  (dx < dest_w)  &&  (dy < dest_h)
-       &&  (sx >= 0)  &&  (sy >=  0)  &&  (sx < source_w)  &&  (sy < source_h)){
+    if((dx >= 0) && (dy >=  0) && (dx < dest_w) && (dy < dest_h)
+       && (sx >= 0) && (sy >=  0) && (sx < source_w) && (sy < source_h)){
         let source_offset: i32 = source_bpp*sx + source_pitch*sy;
         let dest_offset: i32 = dest_bpp*dx + dest_pitch*dy;
         unsafe {
@@ -68,12 +70,15 @@ fn transfer_pixel(source: &Surface, dest: &Surface, sx: i32, sy: i32,
             if(!(transparent
                  // Use color (0,0,0) to signal transparency.
                  && (*(source_pixels_offset as *const u8)==0)
-                 && (*((source_pixels_offset.wrapping_add(1 as usize)) as *const u8)==0)
-                 && (*((source_pixels_offset.wrapping_add(2 as usize)) as *const u8)==0))){
+                 && (*((source_pixels_offset.wrapping_add(1 as usize))
+                       as *const u8)==0)
+                 && (*((source_pixels_offset.wrapping_add(2 as usize))
+                       as *const u8)==0))){
                 let dest_pixels: *mut c_void = (*dest.raw()).pixels;
                 let dest_pixels_offset: *mut c_void
                     = dest_pixels.wrapping_add(dest_offset as usize);
-                std::ptr::copy_nonoverlapping(source_pixels_offset, dest_pixels_offset,
+                std::ptr::copy_nonoverlapping(source_pixels_offset,
+                                              dest_pixels_offset,
                                               source_bpp as usize);
                 return true;
             } // if
@@ -83,9 +88,56 @@ fn transfer_pixel(source: &Surface, dest: &Surface, sx: i32, sy: i32,
     return false;
 }
 
+// NOTE: This interprets the pixel-space of the sky image as a spherical polar
+// coordinate chart, so objects at higher elevation angles become severely
+// distorted.
+fn transform_and_draw_sky(player: &Player, sky: &Surface,
+                          screen: &mut Surface, z_buffer: &DMatrix<f32>){
+    let t_h = sky.height() as f32;
+    let t_w = sky.width() as f32;
+    let cos_pitch = player.pitch.cos();
+    let sin_pitch = player.pitch.sin();
+    let cos_yaw = player.yaw.cos();
+    let sin_yaw = player.yaw.sin();
+    for j in 0..H {
+        for i in 0..W {
+            // Render last and skip any pixel that's already covered.
+            if(z_buffer[(j as usize, i as usize)] < FAR_Z){continue;}
+
+            let screen_r = SVector::<f32,3>::new(((i as f32)
+                                                  -(W2 as f32))/(W2 as f32),
+                                                 ((j as f32)
+                                                  -(H2 as f32))/(H2 as f32),
+                                                 1.0);
+            let x_screen = (1.0/screen_r.norm())*screen_r;
+            let x_pitch =  SVector::<f32,3>::new(x_screen[0],
+                                                 x_screen[1]*cos_pitch
+                                                 + x_screen[2]*sin_pitch,
+                                                 -x_screen[1]*sin_pitch
+                                                 + x_screen[2]*cos_pitch);
+            let x_yaw = SVector::<f32,3>::new(x_pitch[0]*cos_yaw
+                                              + x_pitch[2]*sin_yaw,
+                                              x_pitch[1],
+                                              -x_pitch[0]*sin_yaw
+                                              + x_pitch[2]*cos_yaw);
+            let x = SVector::<f32,3>::new(x_yaw[0], x_yaw[2], -x_yaw[1]);
+            let phi = x[2].atan2((x[0]*x[0] + x[1]*x[1]).sqrt());
+            // No sky below horizontal.
+            if(phi < 0.0){continue;}
+            // Positive theta goes to right of player for y-axis pointing
+            // out of screen.
+            let theta = x[0].atan2(x[1]);
+            let tx = t_w*(theta + PI)/(2.0*PI);
+            let ty = t_h*(0.5*PI - phi)/(0.5*PI);
+            transfer_pixel(sky, screen, tx as i32, ty as i32,
+                           i as i32, j as i32, false);
+        } // i
+    } // j
+}
+
 fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
-                             texture: &Surface,
-                             screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
+                           texture: &Surface,
+                           screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
     let p0 = SVector::<f32,3>::new(x1, y1, 0.5*(WALL_H as f32));
     let p1 = SVector::<f32,3>::new(x2, y2, 0.5*(WALL_H as f32));
     let p2 = SVector::<f32,3>::new(x1, y1, -0.5*(WALL_H as f32));
@@ -96,8 +148,9 @@ fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
 }
 
 static EPS: f32 = 1e-8;
-fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f32,3>,
-                        texture: &Surface, screen: &Surface, z_buffer: &mut DMatrix<f32>,
+fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
+                        x2: &SVector<f32,3>, texture: &Surface,
+                        screen: &Surface, z_buffer: &mut DMatrix<f32>,
                         transparent: bool){
     let v1 = x1 - x0;
     let v2 = x2 - x0;
@@ -106,7 +159,8 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f
     // Completely skip rendering surfaces in some easily-detected cases:
 
     // All vertices behind camera:
-    if((x0[2] <= 0.0) && (x1[2] <= 0.0) && (x2[2] <= 0.0) && (x3[2] <= 0.0)){return;}
+    if((x0[2] <= 0.0) && (x1[2] <= 0.0) && (x2[2] <= 0.0) && (x3[2] <= 0.0))
+    {return;}
     // All vertices to right of frustum:
     if((x0[0] > 0.0 && x0[2] <= x0[0]) &&
        (x1[0] > 0.0 && x1[2] <= x1[0]) &&
@@ -137,7 +191,8 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f
 
     // Compute bounding box in screen-space:
 
-    // Resort to brute-force bounds for large polygons that extend behind camera.
+    // Resort to brute-force bounds for large polygons that extend behind
+    // the camera.
     let mut i_min: i32 = -(W2 as i32);
     let mut i_max: i32 = (W2 as i32);
     let mut j_min: i32 = -(H2 as i32);
@@ -176,21 +231,23 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f
             let u = uvt[0];
             let v = uvt[1];
             let t = uvt[2];
-            if((u <= 0.0) || (v <= 0.0) || (u >= 1.0) || (v >= 1.0) || (t <= 0.0)){continue;}
+            if((u <= 0.0) || (v <= 0.0) || (u >= 1.0) || (v >= 1.0)
+               || (t <= 0.0)){continue;}
             let W2_i = (W2 as i32) + i;
             let z = x0[2] + u*v1[2] + v*v2[2];
             if(z > z_buffer[(H2_j as usize,W2_i as usize)]){continue;}
             let t_col = (u*t_w) as i32;
             let t_row = (v*t_h) as i32;
-            if(transfer_pixel(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
+            if(transfer_pixel(texture, screen, t_col, t_row, W2_i, H2_j,
+                              transparent)){
                 z_buffer[(H2_j as usize, W2_i as usize)] = z;
             }
         } // j
     } // i
 }
 
-fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface, player: &Player,
-                             x: f32, y: f32, scale: f32,
+fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
+                             player: &Player, x: f32, y: f32, scale: f32,
                              above_ground: f32, z_buffer: &mut DMatrix<f32>){
     let s_w = (source.width() as f32)*scale;
     let s_h = (source.height() as f32)*scale;
@@ -207,9 +264,10 @@ fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface, player: &Play
     render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true);
 }
 
-fn transform_and_draw_floor(source: &Surface, dest: &mut Surface, player: &Player,
-              x_low: f32, x_high: f32, y_low: f32, y_high: f32,
-              z_buffer: &mut DMatrix<f32>){
+fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
+                            player: &Player, x_low: f32, x_high: f32,
+                            y_low: f32, y_high: f32,
+                            z_buffer: &mut DMatrix<f32>){
     let x0 = SVector::<f32,3>::new(x_low, y_low, -0.5*(WALL_H as f32));
     let x1 = SVector::<f32,3>::new(x_high, y_low, -0.5*(WALL_H as f32));
     let x2 = SVector::<f32,3>::new(x_low, y_high, -0.5*(WALL_H as f32));
@@ -220,7 +278,8 @@ fn transform_and_draw_floor(source: &Surface, dest: &mut Surface, player: &Playe
 }
 
 fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
-    let x_trans = SVector::<f32,3>::new(x[0] - player.x[0], -x[2], x[1] - player.x[1]);
+    let x_trans = SVector::<f32,3>::new(x[0] - player.x[0], -x[2],
+                                        x[1] - player.x[1]);
     let cos_yaw = player.yaw.cos();
     let sin_yaw = player.yaw.sin();
     let x_yaw = SVector::<f32,3>::new(x_trans[0]*cos_yaw - x_trans[2]*sin_yaw,
@@ -261,13 +320,15 @@ impl Player {
     pub fn handle_input(self: &mut Player, event_pump: &mut EventPump) -> bool{
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit{..} | Event::KeyDown{keycode: Some(Keycode::Escape), .. }
+                Event::Quit{..} |
+                Event::KeyDown{keycode: Some(Keycode::Escape), .. }
                 => return true,
                 Event::MouseMotion{xrel, yrel, .. }
                 => {self.yaw += (xrel as f32)*SENSITIVITY;
-                    self.pitch = f32::max(-0.5*std::f32::consts::PI,
-                                          f32::min(0.5*std::f32::consts::PI,
-                                                   self.pitch + (yrel as f32)*SENSITIVITY))},
+                    self.pitch = f32::max(-0.5*PI,
+                                          f32::min(0.5*PI, self.pitch
+                                                   + (yrel as f32)
+                                                   *SENSITIVITY))},
                 Event::KeyDown{keycode: Some(Keycode::A), .. } => self.l = 1,
                 Event::KeyDown{keycode: Some(Keycode::D), .. } => self.r = 1,
                 Event::KeyDown{keycode: Some(Keycode::W), .. } => self.u = 1,
@@ -338,10 +399,12 @@ impl<'a> Wall<'a> {
                texture: &'a Surface<'a>) -> Wall<'a> {
         match wall_type {
             WallType::ConstantX =>
-                Wall{x1: constant, x2: constant, y1: start, y2: end, wall_type: wall_type,
+                Wall{x1: constant, x2: constant, y1: start, y2: end,
+                     wall_type: wall_type,
                      texture: texture},
             WallType::ConstantY =>
-                Wall{y1: constant, y2: constant, x1: start, x2: end, wall_type: wall_type,
+                Wall{y1: constant, y2: constant, x1: start, x2: end,
+                     wall_type: wall_type,
                      texture: texture},
         } // match
     } // new
@@ -379,10 +442,11 @@ struct Sprite<'a> {
 impl<'a> Sprite<'a> {
     pub fn new(img: &'a Surface<'a>, x: f32, y: f32,
                above_ground: f32, scale: f32) -> Sprite {
-        return Sprite{img: img, x: x, y: y, above_ground: above_ground, scale: scale};
+        return Sprite{img: img, x: x, y: y, above_ground: above_ground,
+                      scale: scale};
     }
 
-    pub fn render(self: &Sprite<'a>, player: &Player, sin_yaw: f32, cos_yaw: f32,
+    pub fn render(self: &Sprite<'a>, player: &Player,
                   dest: &mut Surface, z_buffer: &mut DMatrix<f32>){
         transform_and_draw_sprite(self.img, dest, player, self.x, self.y,
                                   self.scale, self.above_ground, z_buffer);
@@ -398,12 +462,14 @@ impl<'a> Level<'a> {
     pub fn new() -> Level<'a> {
         Level{walls: Vec::<Wall>::new()}
     }
-    pub fn add_wall(self: &mut Level<'a>, wall_type: WallType, start: f32, end: f32,
+    pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
+                    start: f32, end: f32,
                     constant: f32, texture: &'a Surface<'a>){
         self.walls.push(Wall::new(wall_type, start, end, constant, texture));
     }
-    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>,
-                            player: &Player){
+    pub fn draw_all_walls(&self, dest: &mut Surface,
+                          z_buffer: &mut DMatrix<f32>,
+                          player: &Player){
         for w in self.walls.iter() {w.render(player, dest, z_buffer);}
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
@@ -413,8 +479,10 @@ impl<'a> Level<'a> {
     }
 }
 
-fn load_image_with_format(filename: String, format: PixelFormatEnum) -> Surface<'static> {
-    let orig_image: Surface = <Surface as LoadSurface>::from_file(filename).unwrap();
+fn load_image_with_format(filename: String,
+                          format: PixelFormatEnum) -> Surface<'static> {
+    let orig_image: Surface = <Surface as LoadSurface>::from_file(filename)
+        .unwrap();
     return orig_image.convert_format(format).unwrap();
 }
 
@@ -447,12 +515,16 @@ fn main() -> Result<(), String> {
     let draw_surf_rect = draw_surf.rect();
 
     let format = draw_surf.pixel_format_enum();
-    let outer_wall_texture: Surface = load_image_with_format("data/texture2.bmp".to_string(),
-                                                             format);
-    let inner_wall_texture: Surface = load_image_with_format("data/texture1.bmp".to_string(),
-                                                             format);
-    let floor_texture: Surface = load_image_with_format("data/floor.bmp".to_string(), format);
-    let monster_sprite: Surface = load_image_with_format("data/monster.bmp".to_string(), format);
+    let outer_wall_texture: Surface
+        = load_image_with_format("data/texture2.bmp".to_string(), format);
+    let inner_wall_texture: Surface
+        = load_image_with_format("data/texture1.bmp".to_string(), format);
+    let floor_texture: Surface
+        = load_image_with_format("data/floor.bmp".to_string(), format);
+    let sky_texture: Surface
+        = load_image_with_format("data/sky.png".to_string(), format);
+    let monster_sprite: Surface
+        = load_image_with_format("data/monster.bmp".to_string(), format);
     let mut player = Player::new();
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
@@ -469,8 +541,10 @@ fn main() -> Result<(), String> {
     let constant_x = x1;
 
     let mut level = Level::new();
-    level.add_wall(WallType::ConstantY, x1, x2, constant_y, &inner_wall_texture);
-    level.add_wall(WallType::ConstantX, y1, y2, constant_x, &outer_wall_texture);
+    level.add_wall(WallType::ConstantY, x1, x2, constant_y,
+                   &inner_wall_texture);
+    level.add_wall(WallType::ConstantX, y1, y2, constant_x,
+                   &outer_wall_texture);
 
     let n_wall = 100;
     for i in 0..n_wall{
@@ -518,13 +592,17 @@ fn main() -> Result<(), String> {
                                  0.0, FLOOR_W, 0.0, FLOOR_W, &mut z_buffer);
 
         // Draw the single test sprite:
-        sprite.render(&player, player.yaw.sin(), player.yaw.cos(),
-                      &mut draw_surf, &mut z_buffer);
+        sprite.render(&player, &mut draw_surf, &mut z_buffer);
 
-        // NOTE: This is the only way I've found to get software-rendered images to
-        // the screen reliably in both fullscreen and windowed modes, without tearing
-        // or flickering artifacts.
-        let texture = Texture::from_surface(&draw_surf, &texture_creator).unwrap();
+        // Draw sky last:
+        transform_and_draw_sky(&player, &sky_texture, &mut draw_surf,
+                               &z_buffer);
+
+        // NOTE: This is the only way I've found to get software-rendered
+        // images to the screen reliably in both fullscreen and windowed
+        // modes, without tearing or flickering artifacts.
+        let texture = Texture::from_surface(&draw_surf,
+                                            &texture_creator).unwrap();
         canvas.copy(&texture, draw_surf_rect, draw_surf_rect);
         canvas.present();
 
