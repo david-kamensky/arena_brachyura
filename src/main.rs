@@ -106,9 +106,9 @@ fn transform_and_draw_sky(player: &Player, sky: &Surface,
             // Render last and skip any pixel that's already covered.
             if(z_buffer[(j as usize, i as usize)] < FAR_Z){continue;}
 
-            let screen_r = SVector::<f32,3>::new(((i as f32)
+            let screen_r = SVector::<f32,3>::new(((i as f32)+0.5
                                                   -(W2 as f32))/(W2 as f32),
-                                                 ((j as f32)
+                                                 ((j as f32)+0.5
                                                   -(H2 as f32))/(H2 as f32),
                                                  1.0);
             let x_screen = (1.0/screen_r.norm())*screen_r;
@@ -213,26 +213,26 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
         let i1 = ((W2 as f32)*x1[0]/x1[2]) as i32;
         let i2 = ((W2 as f32)*x2[0]/x2[2]) as i32;
         let i3 = ((W2 as f32)*x3[0]/x3[2]) as i32;
-        i_min = max(-(W2 as i32), min(i0,min(i1,min(i2,i3))));
-        i_max = min((W2 as i32), max(i0,max(i1,max(i2,i3))));
+        i_min = max(-(W2 as i32), min(i0,min(i1,min(i2,i3))) - 1);
+        i_max = min((W2 as i32), max(i0,max(i1,max(i2,i3))) + 1);
 
         let j0 = ((H2 as f32)*x0[1]/x0[2]) as i32;
         let j1 = ((H2 as f32)*x1[1]/x1[2]) as i32;
         let j2 = ((H2 as f32)*x2[1]/x2[2]) as i32;
         let j3 = ((H2 as f32)*x3[1]/x3[2]) as i32;
-        j_min = max(-(H2 as i32), min(j0,min(j1,min(j2,j3))));
-        j_max = min((H2 as i32), max(j0,max(j1,max(j2,j3))));
+        j_min = max(-(H2 as i32), min(j0,min(j1,min(j2,j3))) - 1);
+        j_max = min((H2 as i32), max(j0,max(j1,max(j2,j3))) + 1);
     }
 
     // Iterate over the screen-space bounding box:
 
     // Iterate screen rows:
     for j in j_min..j_max {
-        A[(1,2)] = (j as f32)/(H2 as f32);
+        A[(1,2)] = ((j as f32)+0.5)/(H2 as f32);
         let H2_j = (H2 as i32) + j;
         // Iterate screen columns (consecutive in memory for fixed row):
         for i in i_min..i_max {
-            A[(0,2)] = (i as f32)/(W2 as f32);
+            A[(0,2)] = ((i as f32)+0.5)/(W2 as f32);
             if(A.determinant() == 0.0){continue;}
             uvt = A.try_inverse().unwrap()*x0;
             let u = uvt[0];
