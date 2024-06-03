@@ -31,6 +31,7 @@ static FAR_Z: f32 = std::f32::MAX;
 static NEAR_Z: f32 = 100.0;
 static WALL_H: i32 = 480;
 static PLAYER_SPEED: f32 = 0.8;
+static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.3;
 
@@ -79,15 +80,7 @@ fn transfer_pixel(source: &Surface, dest: &Surface, sx: i32, sy: i32,
     return false;
 }
 
-fn render_wall(x1: f32, z1: f32, x2: f32, z2: f32, texture: &Surface,
-               screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
-    let p0 = SVector::<f32,3>::new(x1, -0.5*(WALL_H as f32), z1);
-    let p1 = SVector::<f32,3>::new(x2, -0.5*(WALL_H as f32), z2);
-    let p2 = SVector::<f32,3>::new(x1, 0.5*(WALL_H as f32), z1);
-    render_parallelogram(&p0, &p1, &p2, texture, screen, z_buffer, false);
-}
-
-fn transform_and_render_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
+fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
                              texture: &Surface,
                              screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
     let p0 = SVector::<f32,3>::new(x1, y1, 0.5*(WALL_H as f32));
@@ -298,11 +291,39 @@ impl Player {
         self.vx = nvx;
         self.vy = nvy;
     }
-}
 
-enum TextureType {
-    OuterWall,
-    InnerWall,
+    pub fn collide_with_point(self: &mut Player, point: &SVector<f32,2>){
+        let X = SVector::<f32,2>::new(self.x, self.y);
+        let dx = X - point;
+        let dist = (dx.dot(&dx)).sqrt();
+        if(dist < PLAYER_R){
+            let new_X = point + (PLAYER_R/dist)*dx;
+            self.x = new_X[0];
+            self.y = new_X[1];
+        }
+    }
+
+    pub fn collide_with_wall(self: &mut Player, wall: &Wall){
+        let X = SVector::<f32,2>::new(self.x, self.y);
+        let x0 = SVector::<f32,2>::new(wall.x1, wall.y1);
+        let x1 = SVector::<f32,2>::new(wall.x2, wall.y2);
+        let dx = x1 - x0;
+        let dx2 = dx.dot(&dx);
+        let s = -dx.dot(&(x0 - X))/dx2;
+        if(s < 0.0 || s > 1.0){
+            self.collide_with_point(&x0);
+            self.collide_with_point(&x1);
+        }else{
+            let x = s*dx + x0;
+            let orthog = X - x;
+            let dist = (orthog.dot(&orthog)).sqrt();
+            if(dist < PLAYER_R){
+                let new_X = x + (PLAYER_R/dist)*orthog;
+                self.x = new_X[0];
+                self.y = new_X[1];
+            }
+        }
+    }
 }
 
 enum WallType {
@@ -332,11 +353,6 @@ impl<'a> Wall<'a> {
         } // match
     } // new
 } // impl Wall
-
-enum SpriteType {
-    Monster,
-    Projectile,
-}
 
 struct Sprite<'a> {
     pub img: &'a Surface<'a>,
@@ -372,13 +388,18 @@ impl<'a> Level<'a> {
                     constant: f32, texture: &'a Surface<'a>){
         self.walls.push(Wall::new(wall_type, start, end, constant, texture));
     }
-    pub fn render_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>,
+    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>,
                             player: &Player){
         for w in self.walls.iter() {
-            transform_and_render_wall(player, w.x1, w.y1, w.x2, w.y2, w.texture,
-                                      dest, z_buffer);
+            transform_and_draw_wall(player, w.x1, w.y1, w.x2, w.y2, w.texture,
+                                    dest, z_buffer);
         } // w
-    } // render_all_walls
+    } // draw_all_walls
+    pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
+        for w in self.walls.iter(){
+            player.collide_with_wall(w);
+        }
+    }
 }
 
 fn load_image_with_format(filename: String, format: PixelFormatEnum) -> Surface<'static> {
@@ -468,6 +489,8 @@ fn main() -> Result<(), String> {
         player.x += player.vx*(dt as f32);
         player.y += player.vy*(dt as f32);
 
+        level.collide_player_with_walls(&mut player);
+
 
         // Reset surface to black:
         draw_surf.fill_rect(draw_surf_rect, Color::RGB(0,0,0));
@@ -483,7 +506,7 @@ fn main() -> Result<(), String> {
                    0.0, 4320.0, 0.0, 4320.0, &mut z_buffer);
 
         // Render the level's walls:
-        level.render_all_walls(&mut draw_surf, &mut z_buffer, &player);
+        level.draw_all_walls(&mut draw_surf, &mut z_buffer, &player);
 
 
         let x0 = SVector::<f32,3>::new(-0.5*(WALL_H as f32), -0.5*(WALL_H as f32),
