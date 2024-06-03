@@ -31,6 +31,7 @@ use std::ffi::c_void;
 use std::vec::Vec;
 use std::process::exit;
 use std::fs;
+use std::env;
 
 // Some global constants:
 static W: u32 = 640;
@@ -671,7 +672,8 @@ impl<'a> Monster<'a> {
         let x_diff = self.x - target.x;
         let norm_x_diff = x_diff.norm();
         let norm_z_diff = (self.z - target.z).abs();
-        if((norm_x_diff < PLAYER_R) && (norm_z_diff < PLAYER_R)){
+        let r_sum = PLAYER_R + MONSTER_R;
+        if((norm_x_diff < r_sum) && (norm_z_diff < r_sum)){
             self.die();
             let n = x_diff/norm_x_diff;
             target.score -= SCORE_CHANGE;
@@ -684,7 +686,7 @@ impl<'a> Monster<'a> {
         // Set trial velocity based on player location:
         for i in 0..2 {
             let dx_i = self.x[i] - target.x[i];
-            if(dx_i.abs() > (PLAYER_R + MONSTER_R)){
+            if(dx_i.abs() > r_sum){
                 self.v[i] = -MONSTER_SPEED*(dx_i/dx_i.abs());
             }
         } // i
@@ -765,7 +767,7 @@ impl<'a> TextureSet<'a> {
             monster_sprite: load_image_with_format
                 (directory.clone()+"/monster.png", format),
             monster_dead_sprite: load_image_with_format
-                (directory.clone()+"/deadimg.bmp", format),
+                (directory.clone()+"/monster_dead_sprite.png", format),
             projectile_sprite: load_image_with_format
                 (directory.clone()+"/projectile.png", format),
             projectile_splash_sprite: load_image_with_format
@@ -908,27 +910,38 @@ impl<'a> Level<'a> {
         let mut col: i32 = -1;
         let mut factor: f32 = 6.0;
         let WHF = WALL_H as f32;
-        // Interior pillars:
-        for i in 0..3 {
-            loop {
-                col = rng.gen_range(0..4) as i32;
-                if(col != last_col){break;}
-            } // loop
-            last_col = col;
-            if(i > 1){factor = 2.0;}
-            self.add_pillar(SVector::<f32,2>::new(2.0*(col as f32)*WHF,
-                                                  factor*WHF), rng);
-        } // i
+        // `n_row` x `n_col` grid cells:
+        let n_row = 4;
+        let n_col = 4;
+        let n_pillars_per_row = 2;
+        // Add pillars at random columns in each row:
+        for row in 0..n_row {
+            for pillar in 0..n_pillars_per_row {
+                loop {
+                    col = rng.gen_range(0..n_col) as i32;
+                    if(col != last_col){break;}
+                } // loop
+                last_col = col;
+                self.add_pillar(SVector::<f32,2>::new
+                                ((4.0*(col as f32) + 1.0)*WHF,
+                                 (4.0*(row as f32) + 1.0)*WHF), rng);
+            } // pillar
+        } // row
+
         // Exterior walls:
-        for i in 0..9 {
+        for i in 0..(4*n_row) {
             self.add_wall(WallType::ConstantX, (i as f32)*WHF,
                           ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
             self.add_wall(WallType::ConstantX, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 9.0*WHF, self.outer_wall_texture);
+                          ((i+1) as f32)*WHF, 4.0*(n_col as f32)*WHF,
+                          self.outer_wall_texture);
+        } // i
+        for i in 0..(4*n_col) {
             self.add_wall(WallType::ConstantY, (i as f32)*WHF,
                           ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
             self.add_wall(WallType::ConstantY, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 9.0*WHF, self.outer_wall_texture);
+                          ((i+1) as f32)*WHF, 4.0*(n_row as f32)*WHF,
+                          self.outer_wall_texture);
         } // i
     }
 
@@ -1037,12 +1050,47 @@ fn data_filename(name: &str) -> String {
     return (DATA_ROOT.to_owned()+name).to_string();
 }
 
-static FULLSCREEN: bool = true;
+struct CmdArgs {
+    pub level: u32,
+    pub windowed: bool,
+}
+
+impl CmdArgs {
+    pub fn new() -> CmdArgs {
+        let argv: Vec<String> = env::args().collect();
+        let argc = argv.len();
+        let mut skip_arg = false;
+
+        // Default values of arguments:
+        let mut level = 0;
+        let mut windowed = false;
+
+        for i in 0..argc {
+            if(skip_arg){skip_arg = false; continue;}
+            if(argv[i] == "--level"){
+                if(i<(argc-1)){
+                    level = argv[i+1].parse::<u32>()
+                        .expect("Invalid number provided for '--level'.");
+                    skip_arg = true;
+                }
+            }else if(argv[i] == "--windowed"){
+                windowed = true;
+            }
+        } // i
+        return CmdArgs{level: level, windowed: windowed};
+    }
+}
+
 fn main() -> Result<(), String> {
+
+    let cmd_args = CmdArgs::new();
+    let start_level = cmd_args.level;
+    let fullscreen = !(cmd_args.windowed);
+
     let mut sdl_context = sdl2::init()?;
     let mut video_subsystem = sdl_context.video()?;
 
-    let mut window = if(FULLSCREEN){
+    let mut window = if(fullscreen){
         video_subsystem.window("window", W, H)
             .fullscreen().build().map_err(|e| e.to_string())?
     }else{
@@ -1069,10 +1117,13 @@ fn main() -> Result<(), String> {
 
     let texture_set_list = parse_texture_list(data_filename("texture_sets"));
 
-    let texture_set = TextureSet::new(data_filename(&texture_set_list[0]),
-                                      format);
+    let texture_set = TextureSet::new(
+        data_filename(&texture_set_list
+                      [(start_level % (texture_set_list.len() as u32))
+                       as usize]),
+        format);
 
-    let mut level_seed: u64 = 0;
+    let mut level_seed: u64 = start_level as u64;
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
     let mut game = Game::new(&texture_set, &mut rng);
