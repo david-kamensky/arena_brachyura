@@ -13,6 +13,7 @@ use sdl2::video::WindowSurfaceRef;
 use sdl2::video::SwapInterval;
 use sdl2::image::LoadSurface;
 use sdl2::render::Texture;
+use sdl2::mouse::MouseButton;
 
 use nalgebra::SMatrix;
 use nalgebra::DMatrix;
@@ -40,7 +41,9 @@ static FLOOR_TILE_W: f32 = (WALL_H as f32);
 static PLAYER_SPEED: f32 = 1.2;
 static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
-static PL_PROJ_SPEED: f32 = 1.3;
+static PL_PROJ_SPEED: f32 = 1.7;
+static PL_PROJ_MAX_FLIGHT_TIME: i32 = 3000;
+static PL_PROJ_R: f32 = 50.0;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 static BOB_AMPLITUDE: f32 = 30.0;
@@ -314,7 +317,51 @@ fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
                                  x_yaw[1]*sin_pitch + x_yaw[2]*cos_pitch);
 }
 
-struct Player {
+struct Projectile<'a> {
+    pub sprite: &'a Surface<'a>,
+    pub x: SVector<f32,3>,
+    pub v: SVector<f32,3>,
+    pub ready: bool,
+    pub flight_time: i32,
+}
+
+impl<'a> Projectile<'a> {
+    pub fn new(sprite: &'a Surface<'a>) -> Projectile<'a> {
+        Projectile{sprite: sprite,
+                   x: SVector::<f32,3>::new(0.0,0.0,0.0),
+                   v: SVector::<f32,3>::new(0.0,0.0,0.0),
+                   ready: true,
+                   flight_time: 0,}
+    }
+    pub fn reset(&mut self){
+        self.ready = true;
+    }
+    pub fn advance(self: &mut Projectile<'a>, dt: i32){
+        if(self.ready){return;}
+        self.flight_time += dt;
+        if(self.flight_time > PL_PROJ_MAX_FLIGHT_TIME){self.reset();}
+        else{self.x += (dt as f32)*self.v;}
+    }
+    pub fn collide_with_level(&mut self, level: &Level){
+        if(self.ready){return;}
+        // Check collision with floor, or flying out into sky.
+        if(self.x[2] < (-0.5*(WALL_H as f32))){self.reset(); return;}
+        if(self.x[2] > (0.5*(WALL_H as f32))){return;}
+        // Check for collisions with walls:
+        for wall in &level.walls {
+            let self_x_2d = SVector::<f32,2>::new(self.x[0], self.x[1]);
+            let x = wall.closest_point(&self_x_2d);
+            let orthog = self_x_2d - x;
+            let dist = orthog.norm();
+            if(dist < PL_PROJ_R){
+                self.reset();
+                return;
+            }
+        } // wall
+    }
+}
+
+struct Player<'a> {
     pub x: SVector<f32,2>,
     pub v: SVector<f32,2>,
     pub yaw: f32,
@@ -323,10 +370,11 @@ struct Player {
     pub r: i32,
     pub u: i32,
     pub d: i32,
+    pub projectile: Projectile<'a>,
 }
 
-impl Player {
-    fn new() -> Player {
+impl<'a> Player<'a> {
+    fn new(projectile_sprite: &'a Surface<'a>) -> Player<'a> {
         Player{
             x: SVector::<f32,2>::new(0.0,0.0),
             v: SVector::<f32,2>::new(0.0,0.0),
@@ -336,9 +384,11 @@ impl Player {
             r: 0,
             u: 0,
             d: 0,
+            projectile: Projectile::new(projectile_sprite),
         }
     }
-    pub fn handle_input(self: &mut Player, event_pump: &mut EventPump) -> bool{
+    pub fn handle_input(self: &mut Player<'a>,
+                        event_pump: &mut EventPump) -> bool{
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit{..} |
@@ -350,6 +400,8 @@ impl Player {
                                           f32::min(0.5*PI, self.pitch
                                                    + (yrel as f32)
                                                    *SENSITIVITY))},
+                Event::MouseButtonDown{mouse_btn: MouseButton::Left, .. }
+                => self.fire_projectile(),
                 Event::KeyDown{keycode: Some(Keycode::A), .. } => self.l = 1,
                 Event::KeyDown{keycode: Some(Keycode::D), .. } => self.r = 1,
                 Event::KeyDown{keycode: Some(Keycode::W), .. } => self.u = 1,
@@ -363,7 +415,28 @@ impl Player {
         } // for
         return false;
     }
-    pub fn update_velocity_and_position(self: &mut Player, dt: i32){
+    pub fn fire_projectile(self: &mut Player<'a>){
+        if(!self.projectile.ready){return;}
+        self.projectile.x = SVector::<f32,3>::new(self.x[0], self.x[1], 0.0);
+        let pc = self.pitch.cos();
+        let ps = self.pitch.sin();
+        let yc = self.yaw.cos();
+        let ys = self.yaw.sin();
+        self.projectile.v = PL_PROJ_SPEED
+            *SVector::<f32,3>::new(pc*ys, pc*yc, -ps);
+        self.projectile.x += (NEAR_Z/PL_PROJ_SPEED)*self.projectile.v;
+        self.projectile.ready = false;
+        self.projectile.flight_time = 0;
+    }
+    pub fn render_projectile(self: &mut Player<'a>, dest: &mut Surface,
+                             z_buffer: &mut DMatrix<f32>){
+        if(self.projectile.ready){return;}
+        transform_and_draw_sprite(self.projectile.sprite, dest,
+                                  &self.projectile.x,
+                                  2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
+                                  self, z_buffer);
+    }
+    pub fn update_velocity_and_position(self: &mut Player<'a>, dt: i32){
         let ay = ((self.u-self.d) as f32)*PLAYER_ACCEL;
         let ax = ((self.r-self.l) as f32)*PLAYER_ACCEL;
         let nyaw = -self.yaw;
@@ -386,8 +459,7 @@ impl Player {
         self.x += (dt as f32)*self.v;
     }
 
-    pub fn collide_with_wall(self: &mut Player, wall: &Wall){
-
+    pub fn collide_with_wall(self: &mut Player<'a>, wall: &Wall){
         let x = wall.closest_point(&(self.x));
         let orthog = self.x - x;
         let dist = orthog.norm();
@@ -402,7 +474,8 @@ impl Player {
 }
 
 struct Monster<'a> {
-    pub texture: &'a Surface<'a>,
+    pub sprite: &'a Surface<'a>,
+    pub dead_sprite: &'a Surface<'a>,
     pub x: SVector<f32,2>,
     pub v: SVector<f32,2>,
     pub z: f32, // Separated out from 2D movement physics with `x` and `v`.
@@ -411,9 +484,10 @@ struct Monster<'a> {
 }
 
 impl<'a> Monster<'a> {
-    pub fn new(texture: &'a Surface<'a>, x: SVector<f32,2>) -> Monster<'a> {
+    pub fn new(sprite: &'a Surface<'a>, dead_sprite: &'a Surface<'a>,
+               x: SVector<f32,2>) -> Monster<'a> {
         let bob_phase = rand::thread_rng().gen_range(0..100) as f32;
-        Monster{texture: texture, x: x,
+        Monster{sprite: sprite, dead_sprite: dead_sprite, x: x,
                 v: SVector::<f32,2>::new(0.0,0.0),
                 bob_phase: bob_phase,
                 z: BOB_AMPLITUDE*bob_phase.sin(),
@@ -422,7 +496,9 @@ impl<'a> Monster<'a> {
     pub fn render(self: &mut Monster<'a>, dest: &mut Surface,
                   player: &Player, z_buffer: &mut DMatrix<f32>){
         let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
-        transform_and_draw_sprite(self.texture, dest, &x_center,
+        transform_and_draw_sprite(if(self.dead_timer > 0){self.dead_sprite}
+                                  else{self.sprite},
+                                  dest, &x_center,
                                   2.0*MONSTER_R, 2.0*MONSTER_R,
                                   player, z_buffer);
     }
@@ -483,7 +559,7 @@ fn collide_monster_pair(monsters: &mut Vec<Monster>, i: usize, j: usize){
 }
 
 // Brute-force $O(n^2)$ collision detection between monsters:
-fn collide_monsters(monsters: &mut Vec<Monster>){
+fn collide_monsters_with_each_other(monsters: &mut Vec<Monster>){
     for iteration in 0..MONSTER_COLLISION_ITERS {
         for i in 0..monsters.len(){
             for j in (i+1)..monsters.len(){
@@ -491,6 +567,19 @@ fn collide_monsters(monsters: &mut Vec<Monster>){
             } // j
         } // i
     } // iteration
+}
+
+fn collide_monsters_with_projectile(monsters: &mut Vec<Monster>,
+                                    projectile: &mut Projectile){
+    if(projectile.ready){return;}
+    for monster in monsters {
+        let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1],
+                                              monster.z);
+        if((monster_x - projectile.x).norm() < MONSTER_R){
+            projectile.reset();
+            monster.die();
+        }
+    } // monster
 }
 
 enum WallType {
@@ -693,7 +782,11 @@ fn main() -> Result<(), String> {
         = load_image_with_format("data/sky.png".to_string(), format);
     let monster_sprite: Surface
         = load_image_with_format("data/monster.bmp".to_string(), format);
-    let mut player = Player::new();
+    let monster_dead_sprite: Surface
+        = load_image_with_format("data/deadimg.bmp".to_string(), format);
+    let projectile_sprite: Surface
+        = load_image_with_format("data/projimg.bmp".to_string(), format);
+    let mut player = Player::new(&projectile_sprite);
     player.x = SVector::<f32,2>::new(200.0, 200.0);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
@@ -715,7 +808,8 @@ fn main() -> Result<(), String> {
 
     let mut monsters = Vec::<Monster>::new();
     for spawn in &level.spawns {
-        monsters.push(Monster::new(&monster_sprite, *spawn));
+        monsters.push(Monster::new(&monster_sprite, &monster_dead_sprite,
+                                   *spawn));
     } // i
 
     // Main game loop:
@@ -753,7 +847,12 @@ fn main() -> Result<(), String> {
             monster.render(&mut draw_surf, &player, &mut z_buffer);
         } // monster
 
-        collide_monsters(&mut monsters);
+        collide_monsters_with_each_other(&mut monsters);
+        collide_monsters_with_projectile(&mut monsters, &mut player.projectile);
+
+        player.projectile.advance(dt);
+        player.projectile.collide_with_level(&level);
+        player.render_projectile(&mut draw_surf, &mut z_buffer);
 
         // Draw sky last:
         transform_and_draw_sky(&player, &sky_texture, &mut draw_surf,
