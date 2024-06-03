@@ -78,6 +78,7 @@ static SCORE_BAR_MARGIN_FRAC: f32 = 0.05;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
 static DATA_ROOT: &str = "data/";
 static DEFAULT_TEXTURE_PATH: &str = "default_textures/";
+static PARAM_FILENAME: &str = "params.cfg";
 
 static PI: f32 = std::f32::consts::PI;
 
@@ -346,10 +347,11 @@ fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
 fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
                             player: &Player, x_low: f32, x_high: f32,
                             y_low: f32, y_high: f32,
-                            z_buffer: &mut DMatrix<f32>){
-    let x0 = SVector::<f32,3>::new(x_low, y_low, -0.5*(WALL_H as f32));
-    let x1 = SVector::<f32,3>::new(x_high, y_low, -0.5*(WALL_H as f32));
-    let x2 = SVector::<f32,3>::new(x_low, y_high, -0.5*(WALL_H as f32));
+                            z_buffer: &mut DMatrix<f32>, ceiling: bool){
+    let z = if(ceiling){0.5*(WALL_H as f32)}else{-0.5*(WALL_H as f32)};
+    let x0 = SVector::<f32,3>::new(x_low, y_low, z);
+    let x1 = SVector::<f32,3>::new(x_high, y_low, z);
+    let x2 = SVector::<f32,3>::new(x_low, y_high, z);
     let p0 = transform_for_player(&x0, &player);
     let p1 = transform_for_player(&x1, &player);
     let p2 = transform_for_player(&x2, &player);
@@ -407,7 +409,10 @@ impl<'a> Projectile<'a> {
         if(self.ready){return;}
         // Check collision with floor, or flying out into sky.
         if(self.x[2] < (-0.5*(WALL_H as f32))){self.reset(); return;}
-        if(self.x[2] > (0.5*(WALL_H as f32))){return;}
+        if(self.x[2] > (0.5*(WALL_H as f32))){
+            if(level.has_ceiling){self.reset();}
+            return;
+        }
         // Check for collisions with walls:
         for wall in &level.walls {
             let self_x_2d = SVector::<f32,2>::new(self.x[0], self.x[1]);
@@ -768,6 +773,43 @@ fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
     } // monster
 }
 
+struct GameParameters {
+    has_ceiling: bool,
+}
+
+impl GameParameters {
+    pub fn new(cfg_filename: String) -> GameParameters {
+
+        // Default values for parameters:
+        let mut has_ceiling = false;
+
+        println!("Parsing configuration '{}'...", cfg_filename);
+        let file_string: String = fs::read_to_string(cfg_filename).unwrap();
+        let lines = file_string.split("\n");
+        for line in lines {
+            if(line.len() == 0){continue;}
+            let tokens = line.split(" ");
+            let mut i = 0;
+            let mut param = "";
+            let mut value = "";
+            for token in tokens {
+                if(token.len() == 0){continue;}
+                if(i==0){param = token; i += 1;}
+                else if(i==1){value = token; break;}
+                else{break;}
+            }
+            match param {
+                "" => {}, // Happens in pure-whitespace lines; ignore.
+                "has_ceiling"
+                    => {has_ceiling = value.parse::<bool>().unwrap();},
+                _ => {println!("  Warning: Unknown parameter '{}'", param);}
+            }
+        }
+        println!("  has_ceiling = {}", has_ceiling);
+        return GameParameters{has_ceiling: has_ceiling,};
+    }
+}
+
 struct TextureSet<'a> {
     outer_wall_texture: Surface<'a>,
     inner_wall_texture: Surface<'a>,
@@ -872,7 +914,8 @@ impl<'a> Wall<'a> {
                                 self.texture, dest, z_buffer);
     }
 
-    pub fn closest_point(self: &Wall<'a>, x: &SVector<f32,2>) -> SVector<f32,2>{
+    pub fn closest_point(self: &Wall<'a>, x: &SVector<f32,2>)
+                         -> SVector<f32,2>{
         let x0 = SVector::<f32,2>::new(self.x1, self.y1);
         let x1 = SVector::<f32,2>::new(self.x2, self.y2);
         let dx = x1 - x0;
@@ -895,16 +938,19 @@ struct Level<'a> {
     pub outer_wall_texture: &'a Surface<'a>,
     pub floor_texture: &'a Surface<'a>,
     pub sky_texture: &'a Surface<'a>,
+    pub has_ceiling: bool,
 }
 
 impl<'a> Level<'a> {
-    pub fn new(texture_set: &'a TextureSet<'a>) -> Level<'a> {
+    pub fn new(texture_set: &'a TextureSet<'a>,
+               parameters: &'a GameParameters) -> Level<'a> {
         Level{walls: Vec::<Wall>::new(),
               spawns: Vec::<SVector<f32,2>>::new(),
               inner_wall_texture: &texture_set.inner_wall_texture,
               outer_wall_texture: &texture_set.outer_wall_texture,
               floor_texture: &texture_set.floor_texture,
-              sky_texture: &texture_set.sky_texture}
+              sky_texture: &texture_set.sky_texture,
+              has_ceiling: parameters.has_ceiling}
     }
     pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
                     start: f32, end: f32,
@@ -1023,13 +1069,16 @@ struct Game<'a> {
     pub monsters: Vec<Monster<'a>>,
     pub player: Player<'a>,
     pub level: Level<'a>,
+    pub parameters: &'a GameParameters,
 }
 
 impl<'a> Game<'a> {
-    pub fn new(texture_set: &'a TextureSet<'a>,
+    pub fn new(parameters: &'a GameParameters,
+               texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
         let mut new_game
-            = Game{level: Level::<'a>::new(texture_set),
+            = Game{parameters: parameters,
+                   level: Level::<'a>::new(texture_set, parameters),
                    player: Player::<'a>::new(texture_set),
                    monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
@@ -1064,7 +1113,8 @@ impl<'a> Game<'a> {
         return GameState::Continue;
     }
 
-    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
+    pub fn render(&self, draw_surf: &mut Surface,
+                  z_buffer: &mut DMatrix<f32>){
         // Reset z-buffer:
         for i in 0..H{ for j in 0..W{
             z_buffer[(i as usize, j as usize)] = FAR_Z;
@@ -1083,9 +1133,18 @@ impl<'a> Game<'a> {
         transform_and_draw_floor(self.level.floor_texture,
                                  draw_surf, &self.player,
                                  0.0, FLOOR_TILE_W,
-                                 0.0, FLOOR_TILE_W, z_buffer);
-        transform_and_draw_sky(&self.player, &self.level.sky_texture,
-                               draw_surf, z_buffer);
+                                 0.0, FLOOR_TILE_W, z_buffer,
+                                 false);
+        if(self.parameters.has_ceiling){
+            transform_and_draw_floor(self.level.sky_texture,
+                                     draw_surf, &self.player,
+                                     0.0, FLOOR_TILE_W,
+                                     0.0, FLOOR_TILE_W, z_buffer,
+                                     true);
+        }else{
+            transform_and_draw_sky(&self.player, &self.level.sky_texture,
+                                   draw_surf, z_buffer);
+        }
         // Drawing score bar:
         let Wf = W as f32;
         let Hf = H as f32;
@@ -1164,7 +1223,8 @@ fn main() -> Result<(), String> {
     // `draw_surf` is where everything is rendered. It is then copied to the
     // canvas all at once.  Rendering directly to the Window surface is not
     // robust and leads to screen tearing and/or flickering.
-    let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(),
+    let mut draw_surf = Surface::new(screen_surf.width(),
+                                     screen_surf.height(),
                                      screen_surf.pixel_format_enum())?;
     let draw_surf_rect = draw_surf.rect();
 
@@ -1175,13 +1235,16 @@ fn main() -> Result<(), String> {
     let n_texture_sets = texture_set_list.len();
     let mut texture_set_index = (start_level
                                  % (n_texture_sets as u32)) as usize;
-    let mut texture_set = TextureSet::new(
-        data_filename(&texture_set_list[texture_set_index]), format);
+    let mut level_directory = &texture_set_list[texture_set_index];
+    let mut texture_set = TextureSet::new(data_filename(level_directory),
+                                          format);
+    let mut cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
+    let mut parameters = GameParameters::new(data_filename(&cfg_filename));
 
     let mut level_seed: u64 = start_level as u64;
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
-    let mut game = Game::new(&texture_set, &mut rng);
+    let mut game = Game::new(&parameters, &texture_set, &mut rng);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -1201,15 +1264,19 @@ fn main() -> Result<(), String> {
                     drop(game);
                     texture_set_index = ((level_seed as u32)
                                          % (n_texture_sets as u32)) as usize;
+                    level_directory = &texture_set_list[texture_set_index];
                     texture_set = TextureSet::new(
-                        data_filename(&texture_set_list[texture_set_index]),
-                        format);
+                        data_filename(level_directory), format);
+                    cfg_filename = level_directory.to_owned() + "/"
+                        + PARAM_FILENAME;
+                    parameters = GameParameters::new
+                        (data_filename(&cfg_filename));
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&texture_set, &mut rng);},
+                    game = Game::new(&parameters, &texture_set, &mut rng);},
             GameState::Lose
                 => {// Retry with the same random seed after losing:
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&texture_set, &mut rng);},
+                    game = Game::new(&parameters, &texture_set, &mut rng);},
             GameState::Continue => {},
         }
         game.render(&mut draw_surf, &mut z_buffer);
