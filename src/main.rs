@@ -73,7 +73,8 @@ static SCORE_CHANGE: f32 = 0.1;
 //static SCORE_DECAY_RATE: f32 = 0.00006;
 static SCORE_DECAY_RATE: f32 = 0.00004;
 static SCORE_START: f32 = 0.5;
-static SCORE_BAR_FRAC: f32 = 0.025;
+static SCORE_BAR_HEIGHT_FRAC: f32 = 0.025;
+static SCORE_BAR_MARGIN_FRAC: f32 = 0.05;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
 static DATA_ROOT: &str = "data/";
 static DEFAULT_TEXTURE_PATH: &str = "default_textures/";
@@ -444,6 +445,7 @@ struct Player<'a> {
     pub gun_sprite: &'a Surface <'a>,
     pub gun_ready_sprite: &'a Surface <'a>,
     pub score: f32,
+    pub score_bar_background: &'a Surface <'a>,
 }
 
 impl<'a> Player<'a> {
@@ -464,7 +466,8 @@ impl<'a> Player<'a> {
                                            projectile_splash_sprite),
                gun_sprite: &texture_set.gun_sprite,
                gun_ready_sprite: &texture_set.gun_ready_sprite,
-               score: SCORE_START}
+               score: SCORE_START,
+               score_bar_background: &texture_set.score_bar_background,}
     }
     pub fn handle_input(self: &mut Player<'a>,
                         event_pump: &mut EventPump) -> bool{
@@ -520,6 +523,12 @@ impl<'a> Player<'a> {
     }
     pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
                                      z_buffer: &mut DMatrix<f32>){
+        // Draw the score bar as part of the player HUD.
+        let score_bar_rect = Rect::new(0,0,W,
+                                       ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC)
+                                       as u32);
+        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect,
+                       z_buffer);
         // Width of gun image on screen:
         let gun_screen_w = PL_GUN_SCREEN_FRAC*(W as f32);
         // Scale height proportionally based on input image:
@@ -771,6 +780,7 @@ struct TextureSet<'a> {
     projectile_splash_sprite: Surface<'a>,
     gun_sprite: Surface<'a>,
     gun_ready_sprite: Surface<'a>,
+    score_bar_background: Surface<'a>,
 }
 
 impl<'a> TextureSet<'a> {
@@ -809,7 +819,8 @@ impl<'a> TextureSet<'a> {
             projectile_sprite: try_override("projectile.png"),
             projectile_splash_sprite: try_override("projectile_splash.png"),
             gun_sprite: try_override("gun.png"),
-            gun_ready_sprite: try_override("gun_ready.png"),}
+            gun_ready_sprite: try_override("gun_ready.png"),
+            score_bar_background: try_override("score_bar_background.png"),}
     }
 }
 
@@ -1076,10 +1087,17 @@ impl<'a> Game<'a> {
         transform_and_draw_sky(&self.player, &self.level.sky_texture,
                                draw_surf, z_buffer);
         // Drawing score bar:
-        let score_rect = Rect::new(0,0,
-                                   ((W as f32)*self.player.score) as u32,
-                                   ((H as f32)*SCORE_BAR_FRAC) as u32);
-        draw_surf.fill_rect(score_rect, Color::RGB(0,0,255));
+        let Wf = W as f32;
+        let Hf = H as f32;
+        let score_rect = Rect::new((Wf*SCORE_BAR_MARGIN_FRAC) as i32,
+                                   (Hf*SCORE_BAR_HEIGHT_FRAC) as i32,
+                                   (Wf*(1.0-2.0*SCORE_BAR_MARGIN_FRAC)
+                                    *self.player.score) as u32,
+                                   (Hf*SCORE_BAR_HEIGHT_FRAC) as u32);
+        let score_red = (255.0*f32::min(1.0, 2.0*(1.0 - self.player.score)))
+            as u8;
+        let score_green = (255.0*f32::min(1.0, 2.0*self.player.score)) as u8;
+        draw_surf.fill_rect(score_rect, Color::RGB(score_red,score_green,0));
     }
 }
 
