@@ -76,6 +76,7 @@ static SCORE_START: f32 = 0.5;
 static SCORE_BAR_FRAC: f32 = 0.025;
 static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
 static DATA_ROOT: &str = "data/";
+static DEFAULT_TEXTURE_PATH: &str = "default_textures/";
 
 static PI: f32 = std::f32::consts::PI;
 
@@ -773,30 +774,42 @@ struct TextureSet<'a> {
 }
 
 impl<'a> TextureSet<'a> {
-    pub fn new(directory: String, format: PixelFormatEnum) -> TextureSet<'a> {
+    pub fn new(directory: String,
+               format: PixelFormatEnum) -> TextureSet<'a> {
+
+        // This lambda loads a file from the given directory if it exists,
+        // or from a default directory otherwise. Every texture type is
+        // assumed to exist in the default set.
+        let try_override = |filename: &str| -> Surface<'a> {
+            let try_load_texture =  load_image_with_format
+                (directory.clone()+"/"+filename, format);
+            match try_load_texture {
+                Err(e) => {
+                    println!("  Using default for '{}'", filename);
+                    let default_path = DATA_ROOT.to_owned()
+                        + DEFAULT_TEXTURE_PATH + filename;
+                    return load_image_with_format(default_path,
+                                                  format).unwrap();
+                },
+                Ok(texture) => {
+                    println!("  Overriding default for '{}'", filename);
+                    return texture;
+                },
+            }
+        };
+        println!("Loading textures from '{}'", directory);
         TextureSet{
-            outer_wall_texture: load_image_with_format
-                (directory.clone()+"/outer_wall_texture.png", format),
-            inner_wall_texture: load_image_with_format
-                (directory.clone()+"/inner_wall_texture.png", format),
-            floor_texture: load_image_with_format
-                (directory.clone()+"/floor.png", format),
-            sky_texture: load_image_with_format
-                (directory.clone()+"/sky.png", format),
-            monster_sprite: load_image_with_format
-                (directory.clone()+"/monster.png", format),
-            monster_dead_sprite: load_image_with_format
-                (directory.clone()+"/monster_dead_sprite.png", format),
-            monster_spawn_sprite: load_image_with_format
-                (directory.clone()+"/monster_spawn_sprite.png", format),
-            projectile_sprite: load_image_with_format
-                (directory.clone()+"/projectile.png", format),
-            projectile_splash_sprite: load_image_with_format
-                (directory.clone()+"/projectile_splash.png", format),
-            gun_sprite: load_image_with_format
-                (directory.clone()+"/gun.png", format),
-            gun_ready_sprite: load_image_with_format
-                (directory.clone()+"/gun_ready.png", format),}
+            outer_wall_texture: try_override("outer_wall_texture.png"),
+            inner_wall_texture: try_override("inner_wall_texture.png"),
+            floor_texture: try_override("floor.png"),
+            sky_texture: try_override("sky.png"),
+            monster_sprite: try_override("monster.png"),
+            monster_dead_sprite: try_override("monster_dead_sprite.png"),
+            monster_spawn_sprite: try_override("monster_spawn_sprite.png"),
+            projectile_sprite: try_override("projectile.png"),
+            projectile_splash_sprite: try_override("projectile_splash.png"),
+            gun_sprite: try_override("gun.png"),
+            gun_ready_sprite: try_override("gun_ready.png"),}
     }
 }
 
@@ -979,10 +992,13 @@ impl<'a> Level<'a> {
 }
 
 fn load_image_with_format(filename: String,
-                          format: PixelFormatEnum) -> Surface<'static> {
-    let orig_image: Surface = <Surface as LoadSurface>::from_file(filename)
-        .unwrap();
-    return orig_image.convert_format(format).unwrap();
+                          format: PixelFormatEnum)
+                          -> Result<Surface<'static>, String> {
+    let orig_image = <Surface as LoadSurface>::from_file(filename);
+    match orig_image {
+        Err(error_message) => return Err(error_message),
+        Ok(unwrapped_image) => return unwrapped_image.convert_format(format),
+    }
 }
 
 enum GameState {
