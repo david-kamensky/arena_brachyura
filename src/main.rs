@@ -34,6 +34,8 @@ use std::process::exit;
 // Some global constants:
 static W: u32 = 640;
 static H: u32 = 480;
+// static W: u32 = 800;
+// static H: u32 = 600;
 // static W: u32 = 1024;
 // static H: u32 = 768;
 // static W: u32 = 320;
@@ -48,7 +50,7 @@ static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.7;
 static PL_PROJ_MAX_FLIGHT_TIME: i32 = 3000;
 static PL_PROJ_R: f32 = 50.0;
-static PL_GUN_SCREEN_FRAC: f32 = 0.2;
+static PL_GUN_SCREEN_FRAC: f32 = 0.3;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 static BOB_AMPLITUDE: f32 = 30.0;
@@ -70,6 +72,7 @@ static PI: f32 = std::f32::consts::PI;
 // Derived constants:
 static W2: u32 = W/2;
 static H2: u32 = H/2;
+static RATIO: f32 = (W as f32)/(H as f32);
 
 // Returns whether or not the pixel was actually transferred.
 // (May skip for tranparency or out-of-bounds.)
@@ -134,7 +137,7 @@ fn transform_and_draw_sky(player: &Player, sky: &Surface,
             let screen_r = SVector::<f32,3>::new(((i as f32)+0.5
                                                   -(W2 as f32))/(W2 as f32),
                                                  ((j as f32)+0.5
-                                                  -(H2 as f32))/(H2 as f32),
+                                                  -(H2 as f32))/(W2 as f32),
                                                  1.0);
             let x_screen = (1.0/screen_r.norm())*screen_r;
             let x_pitch =  SVector::<f32,3>::new(x_screen[0],
@@ -200,15 +203,15 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
            (x2[0] < 0.0 && x2[2] <= -x2[0]) &&
            (x3[0] < 0.0 && x3[2] <= -x3[0])){return;}
         // All vertices above frustum:
-        if((x0[1] > 0.0 && x0[2] <= x0[1]) &&
-           (x1[1] > 0.0 && x1[2] <= x1[1]) &&
-           (x2[1] > 0.0 && x2[2] <= x2[1]) &&
-           (x3[1] > 0.0 && x3[2] <= x3[1])){return;}
+        if((x0[1] > 0.0 && x0[2] <= RATIO*x0[1]) &&
+           (x1[1] > 0.0 && x1[2] <= RATIO*x1[1]) &&
+           (x2[1] > 0.0 && x2[2] <= RATIO*x2[1]) &&
+           (x3[1] > 0.0 && x3[2] <= RATIO*x3[1])){return;}
         // All vertices below frustum:
-        if((x0[1] < 0.0 && x0[2] <= -x0[1]) &&
-           (x1[1] < 0.0 && x1[2] <= -x1[1]) &&
-           (x2[1] < 0.0 && x2[2] <= -x2[1]) &&
-           (x3[1] < 0.0 && x3[2] <= -x3[1])){return;}
+        if((x0[1] < 0.0 && x0[2] <= -RATIO*x0[1]) &&
+           (x1[1] < 0.0 && x1[2] <= -RATIO*x1[1]) &&
+           (x2[1] < 0.0 && x2[2] <= -RATIO*x2[1]) &&
+           (x3[1] < 0.0 && x3[2] <= -RATIO*x3[1])){return;}
     }
 
     let mut A = SMatrix::<f32,3,3>::new(-v1[0], -v2[0], 0.0,
@@ -241,10 +244,10 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
         i_min = max(-(W2 as i32), min(i0,min(i1,min(i2,i3))) - 1);
         i_max = min((W2 as i32), max(i0,max(i1,max(i2,i3))) + 1);
 
-        let j0 = ((H2 as f32)*x0[1]/x0[2]) as i32;
-        let j1 = ((H2 as f32)*x1[1]/x1[2]) as i32;
-        let j2 = ((H2 as f32)*x2[1]/x2[2]) as i32;
-        let j3 = ((H2 as f32)*x3[1]/x3[2]) as i32;
+        let j0 = ((W2 as f32)*x0[1]/x0[2]) as i32;
+        let j1 = ((W2 as f32)*x1[1]/x1[2]) as i32;
+        let j2 = ((W2 as f32)*x2[1]/x2[2]) as i32;
+        let j3 = ((W2 as f32)*x3[1]/x3[2]) as i32;
         j_min = max(-(H2 as i32), min(j0,min(j1,min(j2,j3))) - 1);
         j_max = min((H2 as i32), max(j0,max(j1,max(j2,j3))) + 1);
     }
@@ -253,7 +256,7 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
 
     // Iterate screen rows:
     for j in j_min..j_max {
-        A[(1,2)] = ((j as f32)+0.5)/(H2 as f32);
+        A[(1,2)] = ((j as f32)+0.5)/(W2 as f32);
         let H2_j = (H2 as i32) + j;
         // Iterate screen columns (consecutive in memory for fixed row):
         for i in i_min..i_max {
@@ -309,16 +312,16 @@ fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
     let s_h = source.height() as f32;
     let x = rect.x() as f32;
     let y = rect.y() as f32;
-    let i0 = max(rect.x() as i32, 0 as i32);
+    let i0 = max(x as i32, 0 as i32);
     let i1 = min((x + w) as i32, W as i32);
-    let j0 = max(rect.y() as i32, 0 as i32);
+    let j0 = max(y as i32, 0 as i32);
     let j1 = min((y + h) as i32, H as i32);
     // Iterate over screen pixels covered by `rect` and transfer corresponding
     // sprite pixels.
     for j in j0..j1{
-        let s_y = (s_h*((j-j0) as f32)/h) as i32;
+        let s_y = (s_h*((j-(y as i32)) as f32)/h) as i32;
         for i in i0..i1{
-            let s_x = (s_w*((i-i0) as f32)/w) as i32;
+            let s_x = (s_w*((i-(x as i32)) as f32)/w) as i32;
             if(transfer_pixel(source, dest, s_x, s_y, i, j, true)){
                 // If the pixel is non-transparent, set the z-buffer to zero
                 // to block anything from rendering over the 2D sprite.
@@ -640,6 +643,39 @@ fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
     } // monster
 }
 
+struct TextureSet<'a> {
+    outer_wall_texture: Surface<'a>,
+    inner_wall_texture: Surface<'a>,
+    floor_texture: Surface<'a>,
+    sky_texture: Surface<'a>,
+    monster_sprite: Surface<'a>,
+    monster_dead_sprite: Surface<'a>,
+    projectile_sprite: Surface<'a>,
+    gun_sprite: Surface<'a>,
+}
+
+impl<'a> TextureSet<'a> {
+    pub fn new(directory: String, format: PixelFormatEnum) -> TextureSet<'a> {
+        TextureSet{
+            outer_wall_texture: load_image_with_format
+                (directory.clone()+"/outer_wall_texture.png", format),
+            inner_wall_texture: load_image_with_format
+                (directory.clone()+"/inner_wall_texture.png", format),
+            floor_texture: load_image_with_format
+                (directory.clone()+"/floor.png", format),
+            sky_texture: load_image_with_format
+                (directory.clone()+"/sky.png", format),
+            monster_sprite: load_image_with_format
+                (directory.clone()+"/monster.png", format),
+            monster_dead_sprite: load_image_with_format
+                (directory.clone()+"/deadimg.bmp", format),
+            projectile_sprite: load_image_with_format
+                (directory.clone()+"/projimg.bmp", format),
+            gun_sprite: load_image_with_format
+                (directory.clone()+"/gun.png", format),}
+    }
+}
+
 enum WallType {
     ConstantX,
     ConstantY,
@@ -818,27 +854,21 @@ struct Game<'a> {
 }
 
 impl<'a> Game<'a> {
-    pub fn new(outer_wall_texture: &'a Surface<'a>,
-               inner_wall_texture: &'a Surface<'a>,
-               floor_texture: &'a Surface<'a>,
-               sky_texture: &'a Surface<'a>,
-               monster_sprite: &'a Surface<'a>,
-               monster_dead_sprite: &'a Surface<'a>,
-               projectile_sprite: &'a Surface<'a>,
-               gun_sprite: &'a Surface<'a>,
+    pub fn new(texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
-        let mut new_game = Game{level: Level::<'a>::new(inner_wall_texture,
-                                                        outer_wall_texture,
-                                                        floor_texture,
-                                                        sky_texture),
-                                player: Player::<'a>::new(projectile_sprite,
-                                                          gun_sprite),
-                                monsters: Vec::<Monster<'a>>::new()};
+        let mut new_game
+            = Game{level: Level::<'a>::new(&texture_set.inner_wall_texture,
+                                           &texture_set.outer_wall_texture,
+                                           &texture_set.floor_texture,
+                                           &texture_set.sky_texture),
+                   player: Player::<'a>::new(&texture_set.projectile_sprite,
+                                             &texture_set.gun_sprite),
+                   monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
         for spawn in &new_game.level.spawns {
-            new_game.monsters.push(Monster::new(monster_sprite,
-                                                monster_dead_sprite,
-                                                *spawn, rng));
+            new_game.monsters.push(
+                Monster::new(&texture_set.monster_sprite,
+                             &texture_set.monster_dead_sprite, *spawn, rng));
         } // i
         new_game.player.x = PLAYER_START;
         return new_game;
@@ -927,32 +957,13 @@ fn main() -> Result<(), String> {
     let draw_surf_rect = draw_surf.rect();
 
     let format = draw_surf.pixel_format_enum();
-    let outer_wall_texture: Surface
-        = load_image_with_format("data/outer_wall_texture.png".to_string(),
-                                 format);
-    let inner_wall_texture: Surface
-        = load_image_with_format("data/inner_wall_texture.png".to_string(),
-                                 format);
-    let floor_texture: Surface
-        = load_image_with_format("data/floor.png".to_string(), format);
-    let sky_texture: Surface
-        = load_image_with_format("data/sky.png".to_string(), format);
-    let monster_sprite: Surface
-        = load_image_with_format("data/monster.bmp".to_string(), format);
-    let monster_dead_sprite: Surface
-        = load_image_with_format("data/deadimg.bmp".to_string(), format);
-    let projectile_sprite: Surface
-        = load_image_with_format("data/projimg.bmp".to_string(), format);
-    let gun_sprite: Surface
-        = load_image_with_format("data/gun.png".to_string(), format);
+
+    let texture_set = TextureSet::new("data".to_string(), format);
 
     let mut level_seed: u64 = 0;
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
-    let mut game = Game::new(&outer_wall_texture, &inner_wall_texture,
-                             &floor_texture, &sky_texture, &monster_sprite,
-                             &monster_dead_sprite, &projectile_sprite,
-                             &gun_sprite, &mut rng);
+    let mut game = Game::new(&texture_set, &mut rng);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -970,19 +981,11 @@ fn main() -> Result<(), String> {
                 => {// Restart with a new random seed after winning:
                     level_seed += 1;
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&outer_wall_texture, &inner_wall_texture,
-                                     &floor_texture, &sky_texture,
-                                     &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite, &gun_sprite,
-                                     &mut rng);},
+                    game = Game::new(&texture_set, &mut rng);},
             GameState::Lose
                 => {// Retry with the same random seed after losing:
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&outer_wall_texture, &inner_wall_texture,
-                                     &floor_texture, &sky_texture,
-                                     &monster_sprite, &monster_dead_sprite,
-                                     &projectile_sprite, &gun_sprite,
-                                     &mut rng);},
+                    game = Game::new(&texture_set, &mut rng);},
             GameState::Continue => {},
         }
         game.render(&mut draw_surf, &mut z_buffer);
