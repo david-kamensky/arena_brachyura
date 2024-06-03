@@ -685,6 +685,7 @@ impl<'a> Monster<'a> {
         }
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
+    pub fn dead(&self) -> bool {return self.dead_timer > 0;}
     pub fn think_and_move(self: &mut Monster<'a>, target: &mut Player,
                           level: &Level, dt: i32, rng: &mut SmallRng){
         // If dead, countdown until respawning.
@@ -763,6 +764,7 @@ fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
                                            player: &mut Player){
     if(player.projectile.ready){return;}
     for monster in monsters {
+        if(monster.dead()){continue;}
         let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1],
                                               monster.z);
         if((monster_x - player.projectile.x).norm() < MONSTER_R){
@@ -1007,10 +1009,16 @@ impl<'a> Level<'a> {
         let n_pillars_per_row = 2;
         // Add pillars at random columns in each row:
         for row in 0..n_row {
-            for pillar in 0..n_pillars_per_row {
+            let mut n_pillars = n_pillars_per_row;
+            // Avoid potential infinite loop:
+            if((row == 0) && (n_pillars == n_col)){n_pillars -= 1;}
+            for pillar in 0..n_pillars {
                 loop {
                     col = rng.gen_range(0..n_col) as i32;
-                    if(col != last_col){break;}
+                    if((col != last_col)
+                       // Prevent adding pillar near origin, right where
+                       // player spawns, for fair start to game.
+                       && (!((row==0) && (col==0)))){break;}
                 } // loop
                 last_col = col;
                 self.add_pillar(SVector::<f32,2>::new
