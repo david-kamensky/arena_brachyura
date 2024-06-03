@@ -13,3 +13,11 @@ features = ["image"]
 
 [dependencies.nalgebra]
 version = "0.32.5"
+
+[profile.release]
+codegen-units = 1
+# debug = 1
+
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 1
