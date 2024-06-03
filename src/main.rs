@@ -68,6 +68,7 @@ static MONSTER_COLLISION_DAMP: f32 = 0.5;
 static MONSTER_COLLISION_ITERS: i32 = 7;
 static DAMAGE_IMPULSE: f32 = 2.5;
 static DEATH_TIME: i32 = 300;
+static SPAWN_TIME: i32 = 300;
 static SCORE_CHANGE: f32 = 0.1;
 //static SCORE_DECAY_RATE: f32 = 0.00006;
 static SCORE_DECAY_RATE: f32 = 0.00004;
@@ -184,7 +185,7 @@ fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
     let pp1 = transform_for_player(&p1, &player);
     let pp2 = transform_for_player(&p2, &player);
     render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer,
-                         false, false);
+                         true, false);
 }
 
 static EPS: f32 = 1e-8;
@@ -629,11 +630,14 @@ impl<'a> Player<'a> {
 struct Monster<'a> {
     pub sprite: &'a Surface<'a>,
     pub dead_sprite: &'a Surface<'a>,
+    pub spawn_sprite: &'a Surface<'a>,
     pub x: SVector<f32,2>,
     pub v: SVector<f32,2>,
     pub z: f32, // Separated out from 2D movement physics with `x` and `v`.
+    pub x_spawn: SVector<f32,3>,
     pub bob_phase: f32,
     pub dead_timer: i32,
+    pub spawn_timer: i32,
 }
 
 impl<'a> Monster<'a> {
@@ -641,11 +645,14 @@ impl<'a> Monster<'a> {
                x: SVector<f32,2>, rng: &mut SmallRng) -> Monster<'a> {
         let bob_phase = rng.gen_range(0..100) as f32;
         Monster{sprite: &texture_set.monster_sprite,
-                dead_sprite: &texture_set.monster_dead_sprite, x: x,
-                v: SVector::<f32,2>::new(0.0,0.0),
+                dead_sprite: &texture_set.monster_dead_sprite,
+                spawn_sprite: &texture_set.monster_spawn_sprite,
+                x: x, v: SVector::<f32,2>::new(0.0,0.0),
                 bob_phase: bob_phase,
                 z: BOB_AMPLITUDE*bob_phase.sin(),
-                dead_timer: 0}
+                dead_timer: 0,
+                spawn_timer: 0,
+                x_spawn: SVector::<f32,3>::new(0.0,0.0,0.0)}
     }
     pub fn render(self: &Monster<'a>, dest: &mut Surface,
                   player: &Player, z_buffer: &mut DMatrix<f32>){
@@ -655,6 +662,12 @@ impl<'a> Monster<'a> {
                                   dest, &x_center,
                                   2.0*MONSTER_R, 2.0*MONSTER_R,
                                   player, z_buffer);
+        if(self.spawn_timer > 0){
+            transform_and_draw_sprite(self.spawn_sprite,
+                                      dest, &self.x_spawn,
+                                      2.0*MONSTER_R, 2.0*MONSTER_R,
+                                      player, z_buffer);
+        }
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
     pub fn think_and_move(self: &mut Monster<'a>, target: &mut Player,
@@ -666,9 +679,14 @@ impl<'a> Monster<'a> {
                 self.dead_timer = 0;
                 let spawn_index = rng.gen_range(0..(level.spawns.len()));
                 self.x = level.spawns[spawn_index];
+                self.spawn_timer = SPAWN_TIME;
+                self.x_spawn = SVector::<f32,3>::new(self.x[0],self.x[1],0.0);
             }
             return;
         } // end if dead
+        if(self.spawn_timer > 0){
+            self.spawn_timer -= dt;
+        }
         let x_diff = self.x - target.x;
         let norm_x_diff = x_diff.norm();
         let norm_z_diff = (self.z - target.z).abs();
@@ -747,6 +765,7 @@ struct TextureSet<'a> {
     sky_texture: Surface<'a>,
     monster_sprite: Surface<'a>,
     monster_dead_sprite: Surface<'a>,
+    monster_spawn_sprite: Surface<'a>,
     projectile_sprite: Surface<'a>,
     projectile_splash_sprite: Surface<'a>,
     gun_sprite: Surface<'a>,
@@ -768,6 +787,8 @@ impl<'a> TextureSet<'a> {
                 (directory.clone()+"/monster.png", format),
             monster_dead_sprite: load_image_with_format
                 (directory.clone()+"/monster_dead_sprite.png", format),
+            monster_spawn_sprite: load_image_with_format
+                (directory.clone()+"/monster_spawn_sprite.png", format),
             projectile_sprite: load_image_with_format
                 (directory.clone()+"/projectile.png", format),
             projectile_splash_sprite: load_image_with_format
@@ -1110,18 +1131,18 @@ fn main() -> Result<(), String> {
     // canvas all at once.  Rendering directly to the Window surface is not
     // robust and leads to screen tearing and/or flickering.
     let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(),
-                                       screen_surf.pixel_format_enum())?;
+                                     screen_surf.pixel_format_enum())?;
     let draw_surf_rect = draw_surf.rect();
 
     let format = draw_surf.pixel_format_enum();
 
     let texture_set_list = parse_texture_list(data_filename("texture_sets"));
 
-    let texture_set = TextureSet::new(
-        data_filename(&texture_set_list
-                      [(start_level % (texture_set_list.len() as u32))
-                       as usize]),
-        format);
+    let n_texture_sets = texture_set_list.len();
+    let mut texture_set_index = (start_level
+                                 % (n_texture_sets as u32)) as usize;
+    let mut texture_set = TextureSet::new(
+        data_filename(&texture_set_list[texture_set_index]), format);
 
     let mut level_seed: u64 = start_level as u64;
     let mut rng = SmallRng::seed_from_u64(level_seed);
@@ -1143,6 +1164,12 @@ fn main() -> Result<(), String> {
             GameState::Win
                 => {// Restart with a new random seed after winning:
                     level_seed += 1;
+                    drop(game);
+                    texture_set_index = ((level_seed as u32)
+                                         % (n_texture_sets as u32)) as usize;
+                    texture_set = TextureSet::new(
+                        data_filename(&texture_set_list[texture_set_index]),
+                        format);
                     rng = SmallRng::seed_from_u64(level_seed);
                     game = Game::new(&texture_set, &mut rng);},
             GameState::Lose
