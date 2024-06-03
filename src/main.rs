@@ -14,6 +14,7 @@ use sdl2::video::SwapInterval;
 use sdl2::image::LoadSurface;
 use sdl2::render::Texture;
 use sdl2::mouse::MouseButton;
+use sdl2::rect::Rect;
 
 use nalgebra::SMatrix;
 use nalgebra::DMatrix;
@@ -53,6 +54,12 @@ static MONSTER_R: f32 = 150.0;
 static MONSTER_COLLISION_DAMP: f32 = 0.5;
 static MONSTER_COLLISION_ITERS: i32 = 7;
 static DEATH_TIME: i32 = 300;
+static SCORE_CHANGE: f32 = 0.1;
+static SCORE_DECAY_RATE: f32 = 0.00006;
+static SCORE_START: f32 = 0.5;
+static SCORE_BAR_FRAC: f32 = 0.025;
+static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
+
 static PI: f32 = std::f32::consts::PI;
 
 
@@ -371,21 +378,21 @@ struct Player<'a> {
     pub u: i32,
     pub d: i32,
     pub projectile: Projectile<'a>,
+    pub score: f32,
 }
 
 impl<'a> Player<'a> {
     fn new(projectile_sprite: &'a Surface<'a>) -> Player<'a> {
-        Player{
-            x: SVector::<f32,2>::new(0.0,0.0),
-            v: SVector::<f32,2>::new(0.0,0.0),
-            yaw: 0.0,
-            pitch: 0.0,
-            l: 0,
-            r: 0,
-            u: 0,
-            d: 0,
-            projectile: Projectile::new(projectile_sprite),
-        }
+        Player{x: SVector::<f32,2>::new(0.0,0.0),
+               v: SVector::<f32,2>::new(0.0,0.0),
+               yaw: 0.0,
+               pitch: 0.0,
+               l: 0,
+               r: 0,
+               u: 0,
+               d: 0,
+               projectile: Projectile::new(projectile_sprite),
+               score: SCORE_START}
     }
     pub fn handle_input(self: &mut Player<'a>,
                         event_pump: &mut EventPump) -> bool{
@@ -428,7 +435,7 @@ impl<'a> Player<'a> {
         self.projectile.ready = false;
         self.projectile.flight_time = 0;
     }
-    pub fn render_projectile(self: &mut Player<'a>, dest: &mut Surface,
+    pub fn render_projectile(self: &Player<'a>, dest: &mut Surface,
                              z_buffer: &mut DMatrix<f32>){
         if(self.projectile.ready){return;}
         transform_and_draw_sprite(self.projectile.sprite, dest,
@@ -493,7 +500,7 @@ impl<'a> Monster<'a> {
                 z: BOB_AMPLITUDE*bob_phase.sin(),
                 dead_timer: 0}
     }
-    pub fn render(self: &mut Monster<'a>, dest: &mut Surface,
+    pub fn render(self: &Monster<'a>, dest: &mut Surface,
                   player: &Player, z_buffer: &mut DMatrix<f32>){
         let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
         transform_and_draw_sprite(if(self.dead_timer > 0){self.dead_sprite}
@@ -503,7 +510,7 @@ impl<'a> Monster<'a> {
                                   player, z_buffer);
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
-    pub fn think_and_move(self: &mut Monster<'a>, target: &Player,
+    pub fn think_and_move(self: &mut Monster<'a>, target: &mut Player,
                           level: &Level, dt: i32){
         // If dead, countdown until respawning.
         if(self.dead_timer > 0){
@@ -518,9 +525,7 @@ impl<'a> Monster<'a> {
         } // end if dead
         if((self.x - target.x).norm() < PLAYER_R){
             self.die();
-
-            // TODO: Update player health/score.
-
+            target.score -= SCORE_CHANGE;
             return;
         } // end if colliding player
         self.bob_phase += BOB_SPEED*(dt as f32);
@@ -569,14 +574,15 @@ fn collide_monsters_with_each_other(monsters: &mut Vec<Monster>){
     } // iteration
 }
 
-fn collide_monsters_with_projectile(monsters: &mut Vec<Monster>,
-                                    projectile: &mut Projectile){
-    if(projectile.ready){return;}
+fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
+                                           player: &mut Player){
+    if(player.projectile.ready){return;}
     for monster in monsters {
         let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1],
                                               monster.z);
-        if((monster_x - projectile.x).norm() < MONSTER_R){
-            projectile.reset();
+        if((monster_x - player.projectile.x).norm() < MONSTER_R){
+            player.projectile.reset();
+            player.score += SCORE_CHANGE;
             monster.die();
         }
     } // monster
@@ -636,21 +642,21 @@ impl<'a> Wall<'a> {
 struct Level<'a> {
     pub walls: Vec::<Wall<'a>>,
     pub spawns: Vec::<SVector<f32,2>>,
-    pub texture1: &'a Surface<'a>,
-    pub texture2: &'a Surface<'a>,
+    pub inner_wall_texture: &'a Surface<'a>,
+    pub outer_wall_texture: &'a Surface<'a>,
     pub floor_texture: &'a Surface<'a>,
     pub sky_texture: &'a Surface<'a>,
 }
 
 impl<'a> Level<'a> {
-    pub fn new(texture1: &'a Surface<'a>,
-               texture2: &'a Surface<'a>,
+    pub fn new(inner_wall_texture: &'a Surface<'a>,
+               outer_wall_texture: &'a Surface<'a>,
                floor_texture: &'a Surface<'a>,
                sky_texture: &'a Surface<'a>,) -> Level<'a> {
         Level{walls: Vec::<Wall>::new(),
               spawns: Vec::<SVector<f32,2>>::new(),
-              texture1: texture1,
-              texture2: texture2,
+              inner_wall_texture: inner_wall_texture,
+              outer_wall_texture: outer_wall_texture,
               floor_texture: floor_texture,
               sky_texture: sky_texture}
     }
@@ -687,10 +693,10 @@ impl<'a> Level<'a> {
         for i in 1..9 {
             if(pts[i][0] == pts[i-1][0]){
                 self.add_wall(WallType::ConstantX, pts[i-1][1], pts[i][1],
-                              pts[i][0], self.texture1);
+                              pts[i][0], self.inner_wall_texture);
             }else{
                 self.add_wall(WallType::ConstantY, pts[i-1][0], pts[i][0],
-                              pts[i][1], self.texture1);
+                              pts[i][1], self.inner_wall_texture);
             } // if/else
         } // i
     }
@@ -714,13 +720,13 @@ impl<'a> Level<'a> {
         } // i
         for i in 0..9 {
             self.add_wall(WallType::ConstantX, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 0.0, self.texture2);
+                          ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
             self.add_wall(WallType::ConstantX, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 9.0*WHF, self.texture2);
+                          ((i+1) as f32)*WHF, 9.0*WHF, self.outer_wall_texture);
             self.add_wall(WallType::ConstantY, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 0.0, self.texture2);
+                          ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
             self.add_wall(WallType::ConstantY, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 9.0*WHF, self.texture2);
+                          ((i+1) as f32)*WHF, 9.0*WHF, self.outer_wall_texture);
         } // i
     }
 
@@ -741,6 +747,96 @@ fn load_image_with_format(filename: String,
     let orig_image: Surface = <Surface as LoadSurface>::from_file(filename)
         .unwrap();
     return orig_image.convert_format(format).unwrap();
+}
+
+enum GameState {
+    Quit,
+    Continue,
+    Win,
+    Lose,
+}
+
+struct Game<'a> {
+    pub monsters: Vec<Monster<'a>>,
+    pub player: Player<'a>,
+    pub level: Level<'a>,
+}
+
+impl<'a> Game<'a> {
+    pub fn new(outer_wall_texture: &'a Surface<'a>,
+               inner_wall_texture: &'a Surface<'a>,
+               floor_texture: &'a Surface<'a>,
+               sky_texture: &'a Surface<'a>,
+               monster_sprite: &'a Surface<'a>,
+               monster_dead_sprite: &'a Surface<'a>,
+               projectile_sprite: &'a Surface<'a>) -> Game<'a>{
+        let mut new_game = Game{level: Level::<'a>::new(inner_wall_texture,
+                                                        outer_wall_texture,
+                                                        floor_texture,
+                                                        sky_texture),
+                                player: Player::<'a>::new(projectile_sprite),
+                                monsters: Vec::<Monster<'a>>::new()};
+        new_game.level.add_walls_randomly();
+        for spawn in &new_game.level.spawns {
+            new_game.monsters.push(Monster::new(monster_sprite,
+                                                monster_dead_sprite,
+                                                *spawn));
+        } // i
+        new_game.player.x = PLAYER_START;
+        return new_game;
+    }
+
+    pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump)
+                        -> GameState {
+
+        // Check for quitting, winning, or losing the current game.
+        if(self.player.handle_input(event_pump)){return GameState::Quit;}
+        if(self.player.score >= 1.0){return GameState::Win;}
+        if(self.player.score <= 0.0){return GameState::Lose;}
+
+        // Otherwise, update the player and monster states, and continue.
+        self.player.update_velocity_and_position(dt);
+        self.level.collide_player_with_walls(&mut self.player);
+        for mut monster in &mut self.monsters {
+            monster.think_and_move(&mut self.player, &self.level, dt);
+        }
+        collide_monsters_with_each_other(&mut self.monsters);
+        collide_monsters_with_player_projectile(&mut self.monsters,
+                                                &mut self.player);
+        self.player.projectile.advance(dt);
+        self.player.projectile.collide_with_level(&self.level);
+        self.player.score -= SCORE_DECAY_RATE*(dt as f32);
+        return GameState::Continue;
+    }
+
+    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
+        // Reset z-buffer:
+        for i in 0..H{ for j in 0..W{
+            z_buffer[(i as usize, j as usize)] = FAR_Z;
+        }}
+        // Draw all sprites:
+        for monster in &self.monsters {
+            monster.render(draw_surf, &self.player, z_buffer);
+        }
+        self.player.render_projectile(draw_surf, z_buffer);
+
+        // Render the level's walls:
+        self.level.draw_all_walls(draw_surf, z_buffer, &self.player);
+
+        // Draw floor and sky last to skip as much as possible through
+        // z-buffer populated by other things.
+        transform_and_draw_floor(self.level.floor_texture,
+                                 draw_surf, &self.player,
+                                 0.0, FLOOR_TILE_W,
+                                 0.0, FLOOR_TILE_W, z_buffer);
+        transform_and_draw_sky(&self.player, &self.level.sky_texture,
+                               draw_surf, z_buffer);
+        // Drawing score bar:
+        let score_rect = Rect::new(0,0,
+                                   ((W as f32)*self.player.score) as u32,
+                                   ((H as f32)*SCORE_BAR_FRAC) as u32);
+        draw_surf.fill_rect(score_rect, Color::RGB(0,0,255));
+    }
 }
 
 static FULLSCREEN: bool = true;
@@ -773,9 +869,11 @@ fn main() -> Result<(), String> {
 
     let format = draw_surf.pixel_format_enum();
     let outer_wall_texture: Surface
-        = load_image_with_format("data/texture2.bmp".to_string(), format);
+        = load_image_with_format("data/outer_wall_texture.bmp".to_string(),
+                                 format);
     let inner_wall_texture: Surface
-        = load_image_with_format("data/texture1.bmp".to_string(), format);
+        = load_image_with_format("data/inner_wall_texture.bmp".to_string(),
+                                 format);
     let floor_texture: Surface
         = load_image_with_format("data/floor.bmp".to_string(), format);
     let sky_texture: Surface
@@ -786,8 +884,10 @@ fn main() -> Result<(), String> {
         = load_image_with_format("data/deadimg.bmp".to_string(), format);
     let projectile_sprite: Surface
         = load_image_with_format("data/projimg.bmp".to_string(), format);
-    let mut player = Player::new(&projectile_sprite);
-    player.x = SVector::<f32,2>::new(200.0, 200.0);
+
+    let mut game = Game::new(&outer_wall_texture, &inner_wall_texture,
+                             &floor_texture, &sky_texture, &monster_sprite,
+                             &monster_dead_sprite, &projectile_sprite);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -795,68 +895,25 @@ fn main() -> Result<(), String> {
     let mut dt: i32 = 10;
     let mut t: i32 = 0;
 
-    let x1: f32 = -0.5*(WALL_H as f32);
-    let x2: f32 = 0.5*(WALL_H as f32);
-    let y1: f32 = 0.5*(WALL_H as f32);
-    let y2: f32 = 1.5*(WALL_H as f32);
-    let constant_y = y1;
-    let constant_x = x1;
-
-    let mut level = Level::new(&inner_wall_texture, &outer_wall_texture,
-                               &floor_texture, &sky_texture);
-    level.add_walls_randomly();
-
-    let mut monsters = Vec::<Monster>::new();
-    for spawn in &level.spawns {
-        monsters.push(Monster::new(&monster_sprite, &monster_dead_sprite,
-                                   *spawn));
-    } // i
-
     // Main game loop:
     loop {
-
         let mut t_start: i32 = timer.ticks() as i32;
-
-        let quitting: bool = player.handle_input(&mut event_pump);
-        if(quitting){break;}
-
-        player.update_velocity_and_position(dt);
-
-        level.collide_player_with_walls(&mut player);
-
-        // Reset surface to black:
-        draw_surf.fill_rect(draw_surf_rect, Color::RGB(0,0,0));
-
-        // Reset z-buffer:
-        for i in 0..H{
-            for j in 0..W{
-                z_buffer[(i as usize, j as usize)] = FAR_Z;
-            }
+        let game_state = game.update_state(dt, &mut event_pump);
+        match game_state {
+            GameState::Quit => break,
+            GameState::Win
+                => {game = Game::new(&outer_wall_texture, &inner_wall_texture,
+                                     &floor_texture, &sky_texture,
+                                     &monster_sprite, &monster_dead_sprite,
+                                     &projectile_sprite);},
+            GameState::Lose
+                => {game = Game::new(&outer_wall_texture, &inner_wall_texture,
+                                     &floor_texture, &sky_texture,
+                                     &monster_sprite, &monster_dead_sprite,
+                                     &projectile_sprite);},
+            GameState::Continue => {},
         }
-
-        // Render the level's walls:
-        level.draw_all_walls(&mut draw_surf, &mut z_buffer, &player);
-
-        // Draw the level's floor:
-        transform_and_draw_floor(&floor_texture, &mut draw_surf, &player,
-                                 0.0, FLOOR_TILE_W,
-                                 0.0, FLOOR_TILE_W, &mut z_buffer);
-
-        for monster in &mut monsters {
-            monster.think_and_move(&player, &level, dt as i32);
-            monster.render(&mut draw_surf, &player, &mut z_buffer);
-        } // monster
-
-        collide_monsters_with_each_other(&mut monsters);
-        collide_monsters_with_projectile(&mut monsters, &mut player.projectile);
-
-        player.projectile.advance(dt);
-        player.projectile.collide_with_level(&level);
-        player.render_projectile(&mut draw_surf, &mut z_buffer);
-
-        // Draw sky last:
-        transform_and_draw_sky(&player, &sky_texture, &mut draw_surf,
-                               &z_buffer);
+        game.render(&mut draw_surf, &mut z_buffer);
 
         // NOTE: This is the only way I've found to get software-rendered
         // images to the screen reliably in both fullscreen and windowed
