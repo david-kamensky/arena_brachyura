@@ -59,6 +59,7 @@ static MONSTER_SPEED: f32 = 0.6;
 static MONSTER_R: f32 = 150.0;
 static MONSTER_COLLISION_DAMP: f32 = 0.5;
 static MONSTER_COLLISION_ITERS: i32 = 7;
+static DAMAGE_IMPULSE: f32 = 2.5;
 static DEATH_TIME: i32 = 300;
 static SCORE_CHANGE: f32 = 0.1;
 //static SCORE_DECAY_RATE: f32 = 0.00006;
@@ -415,12 +416,14 @@ struct Player<'a> {
     pub d: i32,
     pub projectile: Projectile<'a>,
     pub gun_sprite: &'a Surface <'a>,
+    pub gun_ready_sprite: &'a Surface <'a>,
     pub score: f32,
 }
 
 impl<'a> Player<'a> {
     fn new(projectile_sprite: &'a Surface<'a>,
-           gun_sprite: &'a Surface<'a>) -> Player<'a> {
+           gun_sprite: &'a Surface<'a>,
+           gun_ready_sprite: &'a Surface <'a>,) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
                v: SVector::<f32,2>::new(0.0,0.0),
                yaw: 0.0,
@@ -431,6 +434,7 @@ impl<'a> Player<'a> {
                d: 0,
                projectile: Projectile::new(projectile_sprite),
                gun_sprite: gun_sprite,
+               gun_ready_sprite: gun_ready_sprite,
                score: SCORE_START}
     }
     pub fn handle_input(self: &mut Player<'a>,
@@ -489,7 +493,7 @@ impl<'a> Player<'a> {
         // TODO: Have different gun sprites based on whether projectile is
         // ready to fire.
         if(self.projectile.ready){
-            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer);
+            draw_sprite_2d(self.gun_ready_sprite, dest, &gun_rect, z_buffer);
             return;
         }else{
             draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer);
@@ -503,21 +507,24 @@ impl<'a> Player<'a> {
         let ay = ((self.u-self.d) as f32)*PLAYER_ACCEL;
         let ax = ((self.r-self.l) as f32)*PLAYER_ACCEL;
         let nyaw = -self.yaw;
-        let a = SVector::<f32,2>::new(ax*nyaw.cos() - ay*nyaw.sin(),
-                                      ax*nyaw.sin() + ay*nyaw.cos());
-        let dir_a = (1.0/a.norm())*a;
+        let mut a = SVector::<f32,2>::new(ax*nyaw.cos() - ay*nyaw.sin(),
+                                          ax*nyaw.sin() + ay*nyaw.cos());
 
-        // Unconstrained predictor:
-        self.v += (dt as f32)*a;
-
-        // Radial return mapping to enforce speed limit:
+        // If the player is exceeding the speed limit, remove the component
+        // of acceleration in the direction of the current velocity if it
+        // is positive.
         let norm_v = self.v.norm();
         if(norm_v > PLAYER_SPEED){
-            self.v *= (PLAYER_SPEED/norm_v);
+            let v_hat = self.v/norm_v;
+            let a_dot_v_hat = a.dot(&v_hat);
+            if(a_dot_v_hat > 0.0){
+                a -= a_dot_v_hat*v_hat;
+            }
         }
-        // Frictional damping:
+        // Apply acceleration:
+        self.v += (dt as f32)*a;
+        // Implicit exponential integrator for frictional damping:
         self.v *= (-(dt as f32)/MOVE_DAMP_TIMESCALE).exp();
-
         // Integrate position:
         self.x += (dt as f32)*self.v;
     }
@@ -578,9 +585,13 @@ impl<'a> Monster<'a> {
             }
             return;
         } // end if dead
-        if((self.x - target.x).norm() < PLAYER_R){
+        let x_diff = self.x - target.x;
+        let norm_x_diff = x_diff.norm();
+        if(norm_x_diff < PLAYER_R){
             self.die();
+            let n = x_diff/norm_x_diff;
             target.score -= SCORE_CHANGE;
+            target.v -= DAMAGE_IMPULSE*n;
             return;
         } // end if colliding player
         self.bob_phase += BOB_SPEED*(dt as f32);
@@ -652,6 +663,7 @@ struct TextureSet<'a> {
     monster_dead_sprite: Surface<'a>,
     projectile_sprite: Surface<'a>,
     gun_sprite: Surface<'a>,
+    gun_ready_sprite: Surface<'a>,
 }
 
 impl<'a> TextureSet<'a> {
@@ -672,7 +684,9 @@ impl<'a> TextureSet<'a> {
             projectile_sprite: load_image_with_format
                 (directory.clone()+"/projimg.bmp", format),
             gun_sprite: load_image_with_format
-                (directory.clone()+"/gun.png", format),}
+                (directory.clone()+"/gun.png", format),
+            gun_ready_sprite: load_image_with_format
+                (directory.clone()+"/gun_ready.png", format),}
     }
 }
 
@@ -862,7 +876,8 @@ impl<'a> Game<'a> {
                                            &texture_set.floor_texture,
                                            &texture_set.sky_texture),
                    player: Player::<'a>::new(&texture_set.projectile_sprite,
-                                             &texture_set.gun_sprite),
+                                             &texture_set.gun_sprite,
+                                             &texture_set.gun_ready_sprite),
                    monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
         for spawn in &new_game.level.spawns {
