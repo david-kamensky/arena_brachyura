@@ -20,16 +20,13 @@ use std::cmp::min;
 use std::vec::Vec;
 use std::process::exit;
 
+// Modules:
 mod constants;
-use crate::constants::*;
-
 mod pixel_ops;
-use crate::pixel_ops::*;
-
 mod rendering;
-use crate::rendering::*;
-
 mod game_logic;
+
+use crate::constants::*;
 use crate::game_logic::*;
 
 fn main() -> Result<(), String> {
@@ -42,13 +39,9 @@ fn main() -> Result<(), String> {
     let mut video_subsystem = sdl_context.video()?;
 
     let mut window = if(fullscreen){
-        video_subsystem.window("window", W, H)
-            .fullscreen().build().map_err(|e| e.to_string())?
+        video_subsystem.window("window", W, H).fullscreen().build().map_err(|e| e.to_string())?
     }else{
-        video_subsystem.window("window", W, H)
-            .position_centered()
-            .input_grabbed()
-            .build().map_err(|e| e.to_string())?
+        video_subsystem.window("window", W, H).position_centered().input_grabbed().build().map_err(|e| e.to_string())?
     };
     sdl_context.mouse().set_relative_mouse_mode(true);
     sdl_context.mouse().show_cursor(false);
@@ -57,12 +50,9 @@ fn main() -> Result<(), String> {
     let texture_creator = canvas.texture_creator();
     let mut event_pump = sdl_context.event_pump()?;
     let screen_surf = canvas.window_mut().surface(&event_pump)?;
-    // `draw_surf` is where everything is rendered. It is then copied to the
-    // canvas all at once.  Rendering directly to the Window surface is not
+    // `draw_surf` is where everything is rendered. It is then copied to the canvas all at once.  Rendering directly to the Window surface is not
     // robust and leads to screen tearing and/or flickering.
-    let mut draw_surf = Surface::new(screen_surf.width(),
-                                     screen_surf.height(),
-                                     screen_surf.pixel_format_enum())?;
+    let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), screen_surf.pixel_format_enum())?;
     let draw_surf_rect = draw_surf.rect();
 
     let format = draw_surf.pixel_format_enum();
@@ -70,11 +60,9 @@ fn main() -> Result<(), String> {
     let texture_set_list = parse_texture_list(data_filename("texture_sets"));
 
     let n_texture_sets = texture_set_list.len();
-    let mut texture_set_index = (start_level
-                                 % (n_texture_sets as u32)) as usize;
+    let mut texture_set_index = (start_level % (n_texture_sets as u32)) as usize;
     let mut level_directory = &texture_set_list[texture_set_index];
-    let mut texture_set = TextureSet::new(data_filename(level_directory),
-                                          format);
+    let mut texture_set = TextureSet::new(data_filename(level_directory), format);
     let mut cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
     let mut parameters = GameParameters::new(data_filename(&cfg_filename));
 
@@ -99,15 +87,11 @@ fn main() -> Result<(), String> {
                 => {// Restart with a new random seed after winning:
                     level_seed += 1;
                     drop(game);
-                    texture_set_index = ((level_seed as u32)
-                                         % (n_texture_sets as u32)) as usize;
+                    texture_set_index = ((level_seed as u32) % (n_texture_sets as u32)) as usize;
                     level_directory = &texture_set_list[texture_set_index];
-                    texture_set = TextureSet::new(
-                        data_filename(level_directory), format);
-                    cfg_filename = level_directory.to_owned() + "/"
-                        + PARAM_FILENAME;
-                    parameters = GameParameters::new
-                        (data_filename(&cfg_filename));
+                    texture_set = TextureSet::new(data_filename(level_directory), format);
+                    cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
+                    parameters = GameParameters::new(data_filename(&cfg_filename));
                     rng = SmallRng::seed_from_u64(level_seed);
                     game = Game::new(&parameters, &texture_set, &mut rng);},
             GameState::Lose
@@ -118,11 +102,9 @@ fn main() -> Result<(), String> {
         }
         game.render(&mut draw_surf, &mut z_buffer);
 
-        // NOTE: This is the only way I've found to get software-rendered
-        // images to the screen reliably in both fullscreen and windowed
+        // NOTE: This is the only way I've found to get software-rendered images to the screen reliably in both fullscreen and windowed
         // modes, without tearing or flickering artifacts.
-        let texture = Texture::from_surface(&draw_surf,
-                                            &texture_creator).unwrap();
+        let texture = Texture::from_surface(&draw_surf, &texture_creator).unwrap();
         canvas.copy(&texture, draw_surf_rect, draw_surf_rect);
         canvas.present();
 

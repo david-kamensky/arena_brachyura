@@ -106,6 +106,7 @@ pub struct Player<'a> {
     pub gun_ready_sprite: &'a Surface <'a>,
     pub score: f32,
     pub score_bar_background: &'a Surface <'a>,
+    pub minimap_cover: &'a Surface<'a>,
 }
 
 impl<'a> Player<'a> {
@@ -127,7 +128,8 @@ impl<'a> Player<'a> {
                gun_sprite: &texture_set.gun_sprite,
                gun_ready_sprite: &texture_set.gun_ready_sprite,
                score: SCORE_START,
-               score_bar_background: &texture_set.score_bar_background,}
+               score_bar_background: &texture_set.score_bar_background,
+               minimap_cover: &texture_set.minimap_cover,}
     }
     pub fn handle_input(self: &mut Player<'a>,
                         event_pump: &mut EventPump) -> bool{
@@ -184,20 +186,15 @@ impl<'a> Player<'a> {
     pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
                                      z_buffer: &mut DMatrix<f32>){
         // Draw the score bar as part of the player HUD.
-        let score_bar_rect = Rect::new(0,0,W,
-                                       ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC)
-                                       as u32);
-        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect,
-                       z_buffer);
+        let score_bar_rect = Rect::new(0,0,W, ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC) as u32);
+        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect, z_buffer);
         // Width of gun image on screen:
         let gun_screen_w = PL_GUN_SCREEN_FRAC*(W as f32);
         // Scale height proportionally based on input image:
         let gun_screen_h = (self.gun_sprite.height() as f32)*gun_screen_w
             /(self.gun_sprite.width() as f32);
-        let gun_rect = Rect::new((W2 - ((0.5*gun_screen_w) as u32))
-                                 .try_into().unwrap(),
-                                 (H - (gun_screen_h as u32))
-                                 .try_into().unwrap(),
+        let gun_rect = Rect::new((W2 - ((0.5*gun_screen_w) as u32)).try_into().unwrap(),
+                                 (H - (gun_screen_h as u32)).try_into().unwrap(),
                                  gun_screen_w as u32, gun_screen_h as u32);
         if(self.projectile.splash_time > 0){
             transform_and_draw_sprite(self.projectile.splash_sprite, dest,
@@ -480,6 +477,7 @@ pub struct TextureSet<'a> {
     pub gun_sprite: Surface<'a>,
     pub gun_ready_sprite: Surface<'a>,
     pub score_bar_background: Surface<'a>,
+    pub minimap_cover: Surface<'a>
 }
 
 impl<'a> TextureSet<'a> {
@@ -519,7 +517,8 @@ impl<'a> TextureSet<'a> {
             projectile_splash_sprite: try_override("projectile_splash.png"),
             gun_sprite: try_override("gun.png"),
             gun_ready_sprite: try_override("gun_ready.png"),
-            score_bar_background: try_override("score_bar_background.png"),}
+            score_bar_background: try_override("score_bar_background.png"),
+            minimap_cover: try_override("minimap_cover.png"),}
     }
 }
 
@@ -752,9 +751,7 @@ impl<'a> Game<'a> {
         return new_game;
     }
 
-    pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump,
-                        rng: &mut SmallRng)
-                        -> GameState {
+    pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump, rng: &mut SmallRng) -> GameState {
 
         // Check for quitting, winning, or losing the current game.
         if(self.player.handle_input(event_pump)){return GameState::Quit;}
@@ -776,39 +773,51 @@ impl<'a> Game<'a> {
         return GameState::Continue;
     }
 
-    pub fn render(&self, draw_surf: &mut Surface,
-                  z_buffer: &mut DMatrix<f32>){
-        // Reset z-buffer:
-        for i in 0..H{ for j in 0..W{
-            z_buffer[(i as usize, j as usize)] = FAR_Z;
-        }}
-        // Draw all sprites:
+    pub fn draw_minimap(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
+        // TODO: Parameterize with constants.
+        let minimap_w = 128 as i32;
+        let minimap_dot_w = 6;
+        let minimap_x = (W as i32) - minimap_w;
+        let minimap_y = (H as i32) - minimap_w;
+        let minimap_rect = Rect::new(minimap_x, minimap_y, minimap_w as u32, minimap_w as u32);
+        draw_surf.fill_rect(minimap_rect, Color::RGB(16,16,16));
         for monster in &self.monsters {
-            monster.render(draw_surf, &self.player, z_buffer);
-        }
-        self.player.render_gun_and_projectile(draw_surf, z_buffer);
+            if(monster.dead()){continue;}
+            let x_monst_trans = monster.x - self.player.x;
+            let cos_yaw = self.player.yaw.cos();
+            let sin_yaw = self.player.yaw.sin();
+            let x_monst = SVector::<f32,2>::new(x_monst_trans[0]*cos_yaw - x_monst_trans[1]*sin_yaw,
+                                                -(x_monst_trans[0]*sin_yaw + x_monst_trans[1]*cos_yaw));
+            let minimap_r = 8.0*(WALL_H as f32);
+            let minimap_center = SVector::<f32,2>::new((minimap_x as f32) + 0.5*(minimap_w as f32),
+                                                       (minimap_y as f32) + 0.5*(minimap_w as f32));
+            let x_monst_screen = 0.5*(minimap_w as f32)*x_monst/minimap_r + minimap_center;
+            if(((x_monst_screen[0] as i32) > (minimap_x + minimap_dot_w/2)) &&
+               ((x_monst_screen[1] as i32) > (minimap_y + minimap_dot_w/2))){
+                let monst_rect = Rect::new((x_monst_screen[0] as i32) - minimap_dot_w/2,
+                                           (x_monst_screen[1] as i32) - minimap_dot_w/2,
+                                           minimap_dot_w as u32, minimap_dot_w as u32);
+                draw_surf.fill_rect(monst_rect, Color::RGB(255,0,0));
+            }
+            let player_rect = Rect::new((minimap_center[0] as i32) - minimap_dot_w/2,
+                                        (minimap_center[1] as i32) - minimap_dot_w/2,
+                                        minimap_dot_w as u32, minimap_dot_w as u32);
+            draw_surf.fill_rect(player_rect, Color::RGB(0,255,0));
+        } // monster
 
-        // Render the level's walls:
-        self.level.draw_all_walls(draw_surf, z_buffer, &self.player);
+        // Add cover over minimap:
+        draw_sprite_2d(&self.player.minimap_cover, draw_surf, &minimap_rect, z_buffer);
 
-        // Draw floor and sky last to skip as much as possible through
-        // z-buffer populated by other things.
-        transform_and_draw_floor(self.level.floor_texture,
-                                 draw_surf, &self.player,
-                                 0.0, FLOOR_TILE_W,
-                                 0.0, FLOOR_TILE_W, z_buffer,
-                                 false);
-        if(self.parameters.has_ceiling){
-            transform_and_draw_floor(self.level.sky_texture,
-                                     draw_surf, &self.player,
-                                     0.0, FLOOR_TILE_W,
-                                     0.0, FLOOR_TILE_W, z_buffer,
-                                     true);
-        }else{
-            transform_and_draw_sky(&self.player, &self.level.sky_texture,
-                                   draw_surf, z_buffer);
-        }
-        // Drawing score bar:
+        // Fill in z-buffer with zeros, so this can be drawn first to speed up floor rendering; cover
+        // image is mostly transparent, so this needs to be done manually.
+        for i in minimap_x..(W as i32) {
+            for j in minimap_y..(H as i32) {
+                z_buffer[(j as usize, i as usize)] = 0.0;
+            } // j
+        } // i
+    }
+
+    pub fn draw_score_bar(&self, draw_surf: &mut Surface){
         let Wf = W as f32;
         let Hf = H as f32;
         let score_rect = Rect::new((Wf*SCORE_BAR_MARGIN_FRAC) as i32,
@@ -820,6 +829,37 @@ impl<'a> Game<'a> {
             as u8;
         let score_green = (255.0*f32::min(1.0, 2.0*self.player.score)) as u8;
         draw_surf.fill_rect(score_rect, Color::RGB(score_red,score_green,0));
+    }
+
+    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
+        // Reset z-buffer:
+        for i in 0..H{ for j in 0..W{
+            z_buffer[(i as usize, j as usize)] = FAR_Z;
+        }}
+
+        // Foreground HUD elements that fill in z-buffer with zeros; draw first to reduce cost:
+        self.draw_minimap(draw_surf, z_buffer);
+        self.player.render_gun_and_projectile(draw_surf, z_buffer);
+        self.draw_score_bar(draw_surf);
+
+        // Draw all sprites:
+        for monster in &self.monsters {
+            monster.render(draw_surf, &self.player, z_buffer);
+        }
+
+        // Render the level's walls:
+        self.level.draw_all_walls(draw_surf, z_buffer, &self.player);
+
+        // Draw floor and sky last to skip as much as possible through
+        // z-buffer populated by other things.
+        transform_and_draw_floor(self.level.floor_texture, draw_surf, &self.player,
+                                 0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, false);
+        if(self.parameters.has_ceiling){
+            transform_and_draw_floor(self.level.sky_texture, draw_surf, &self.player,
+                                     0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, true);
+        }else{
+            transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
+        }
     }
 }
 
