@@ -30,10 +30,13 @@ static H: u32 = 480;
 static FAR_Z: f32 = std::f32::MAX;
 static NEAR_Z: f32 = 100.0;
 static WALL_H: i32 = 480;
-static PLAYER_SPEED: f32 = 0.8;
+static FLOOR_W: f32 = 4320.0;
+static PLAYER_SPEED: f32 = 1.2;
 static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.3;
+static PLAYER_ACCEL: f32 = 7e-3;
+static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 
 // Derived constants:
 static W2: u32 = W/2;
@@ -217,7 +220,7 @@ fn transform_and_draw_floor(source: &Surface, dest: &mut Surface, player: &Playe
 }
 
 fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
-    let x_trans = SVector::<f32,3>::new(x[0] - player.x, -x[2], x[1] - player.y);
+    let x_trans = SVector::<f32,3>::new(x[0] - player.x[0], -x[2], x[1] - player.x[1]);
     let cos_yaw = player.yaw.cos();
     let sin_yaw = player.yaw.sin();
     let x_yaw = SVector::<f32,3>::new(x_trans[0]*cos_yaw - x_trans[2]*sin_yaw,
@@ -232,10 +235,8 @@ fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
 }
 
 struct Player {
-    pub x: f32,
-    pub y: f32,
-    pub vx: f32,
-    pub vy: f32,
+    pub x: SVector<f32,2>,
+    pub v: SVector<f32,2>,
     pub yaw: f32,
     pub pitch: f32,
     pub l: i32,
@@ -247,10 +248,8 @@ struct Player {
 impl Player {
     fn new() -> Player {
         Player{
-            x: 0.0,
-            y: 0.0,
-            vx: 0.0,
-            vy: 0.0,
+            x: SVector::<f32,2>::new(0.0,0.0),
+            v: SVector::<f32,2>::new(0.0,0.0),
             yaw: 0.0,
             pitch: 0.0,
             l: 0,
@@ -282,45 +281,39 @@ impl Player {
         } // for
         return false;
     }
-    pub fn assign_velocity(self: &mut Player, dt: i32){
-        self.vy = ((self.u-self.d) as f32)*PLAYER_SPEED;
-        self.vx = ((self.r-self.l) as f32)*PLAYER_SPEED;
+    pub fn update_velocity_and_position(self: &mut Player, dt: i32){
+        let ay = ((self.u-self.d) as f32)*PLAYER_ACCEL;
+        let ax = ((self.r-self.l) as f32)*PLAYER_ACCEL;
         let nyaw = -self.yaw;
-        let nvx = self.vx*nyaw.cos() - self.vy*nyaw.sin();
-        let nvy = self.vx*nyaw.sin() + self.vy*nyaw.cos();
-        self.vx = nvx;
-        self.vy = nvy;
-    }
+        let a = SVector::<f32,2>::new(ax*nyaw.cos() - ay*nyaw.sin(),
+                                      ax*nyaw.sin() + ay*nyaw.cos());
+        let dir_a = (1.0/a.norm())*a;
 
-    pub fn collide_with_point(self: &mut Player, point: &SVector<f32,2>){
-        let X = SVector::<f32,2>::new(self.x, self.y);
-        let dx = X - point;
-        let dist = (dx.dot(&dx)).sqrt();
-        if(dist < PLAYER_R){
-            let new_X = point + (PLAYER_R/dist)*dx;
-            self.x = new_X[0];
-            self.y = new_X[1];
+        // Unconstrained predictor:
+        self.v += (dt as f32)*a;
+
+        // Radial return mapping to enforce speed limit:
+        let norm_v = self.v.norm();
+        if(norm_v > PLAYER_SPEED){
+            self.v *= (PLAYER_SPEED/norm_v);
         }
+        // Frictional damping:
+        self.v *= (-(dt as f32)/MOVE_DAMP_TIMESCALE).exp();
+
+        // Integrate position:
+        self.x += (dt as f32)*self.v;
     }
 
     pub fn collide_with_wall(self: &mut Player, wall: &Wall){
-        let X = SVector::<f32,2>::new(self.x, self.y);
-        let x0 = SVector::<f32,2>::new(wall.x1, wall.y1);
-        let x1 = SVector::<f32,2>::new(wall.x2, wall.y2);
-        let dx = x1 - x0;
-        let dx2 = dx.dot(&dx);
-        let s = -dx.dot(&(x0 - X))/dx2;
-        if(s < 0.0 || s > 1.0){
-            self.collide_with_point(&x0);
-            self.collide_with_point(&x1);
-        }else{
-            let x = s*dx + x0;
-            let orthog = X - x;
-            let dist = (orthog.dot(&orthog)).sqrt();
-            if(dist < PLAYER_R){
-                let new_X = x + (PLAYER_R/dist)*orthog;
-                self.x = new_X[0];
-                self.y = new_X[1];
+
+        let x = wall.closest_point(&(self.x));
+        let orthog = self.x - x;
+        let dist = orthog.norm();
+        if(dist < PLAYER_R){
+            self.x = x + (PLAYER_R/dist)*orthog;
+            let orthog_dot_v = orthog.dot(&self.v);
+            if(orthog_dot_v < 0.0){
+                self.v -= (orthog_dot_v/dist/dist)*orthog;
             }
         }
     }
@@ -352,6 +345,27 @@ impl<'a> Wall<'a> {
                      texture: texture},
         } // match
     } // new
+
+    pub fn render(self: &Wall<'a>, player: &Player, dest: &mut Surface,
+                  z_buffer: &mut DMatrix<f32>){
+        transform_and_draw_wall(player, self.x1, self.y1, self.x2, self.y2,
+                                self.texture, dest, z_buffer);
+    }
+
+    pub fn closest_point(self: &Wall<'a>, x: &SVector<f32,2>) -> SVector<f32,2>{
+        let x0 = SVector::<f32,2>::new(self.x1, self.y1);
+        let x1 = SVector::<f32,2>::new(self.x2, self.y2);
+        let dx = x1 - x0;
+        let dx2 = dx.dot(&dx);
+        let s = -dx.dot(&(x0 - x))/dx2;
+        if(s < 0.0 || s > 1.0){
+            let d0 = (x - x0).norm();
+            let d1 = (x - x1).norm();
+            if(d0 < d1){x0}else{x1}
+        }else{
+            s*dx + x0
+        }
+    }
 } // impl Wall
 
 struct Sprite<'a> {
@@ -390,10 +404,7 @@ impl<'a> Level<'a> {
     }
     pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>,
                             player: &Player){
-        for w in self.walls.iter() {
-            transform_and_draw_wall(player, w.x1, w.y1, w.x2, w.y2, w.texture,
-                                    dest, z_buffer);
-        } // w
+        for w in self.walls.iter() {w.render(player, dest, z_buffer);}
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
         for w in self.walls.iter(){
@@ -485,12 +496,9 @@ fn main() -> Result<(), String> {
         let quitting: bool = player.handle_input(&mut event_pump);
         if(quitting){break;}
 
-        player.assign_velocity(dt);
-        player.x += player.vx*(dt as f32);
-        player.y += player.vy*(dt as f32);
+        player.update_velocity_and_position(dt);
 
         level.collide_player_with_walls(&mut player);
-
 
         // Reset surface to black:
         draw_surf.fill_rect(draw_surf_rect, Color::RGB(0,0,0));
@@ -502,20 +510,14 @@ fn main() -> Result<(), String> {
             }
         }
 
-        transform_and_draw_floor(&floor_texture, &mut draw_surf, &player,
-                   0.0, 4320.0, 0.0, 4320.0, &mut z_buffer);
-
         // Render the level's walls:
         level.draw_all_walls(&mut draw_surf, &mut z_buffer, &player);
 
+        // Draw the level's floor:
+        transform_and_draw_floor(&floor_texture, &mut draw_surf, &player,
+                                 0.0, FLOOR_W, 0.0, FLOOR_W, &mut z_buffer);
 
-        let x0 = SVector::<f32,3>::new(-0.5*(WALL_H as f32), -0.5*(WALL_H as f32),
-                                       (WALL_H as f32));
-        let x1 = SVector::<f32,3>::new(0.5*(WALL_H as f32), -0.5*(WALL_H as f32),
-                                       (WALL_H as f32));
-        let x2 = SVector::<f32,3>::new(-0.5*(WALL_H as f32), 0.5*(WALL_H as f32),
-                                       2.0*(WALL_H as f32));
-
+        // Draw the single test sprite:
         sprite.render(&player, player.yaw.sin(), player.yaw.cos(),
                       &mut draw_surf, &mut z_buffer);
 
