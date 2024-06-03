@@ -39,6 +39,14 @@ static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.3;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
+static BOB_AMPLITUDE: f32 = 30.0;
+static BOB_SPEED: f32 = 0.004;
+static MONSTER_SPEED: f32 = 0.6;
+static MONSTER_R: f32 = 150.0;
+static MAX_MONSTERS: i32 = 4;
+static MONSTER_COLLISION_DAMP: f32 = 0.5;
+static MONSTER_COLLISION_ITERS: i32 = 7;
+static DEATH_TIME: i32 = 300;
 static PI: f32 = std::f32::consts::PI;
 
 
@@ -394,6 +402,90 @@ impl Player {
     }
 }
 
+struct Monster {
+    pub x: SVector<f32,2>,
+    pub v: SVector<f32,2>,
+    pub above_ground: f32,
+    pub bob_phase: f32,
+    pub dead_timer: i32,
+}
+
+impl Monster {
+    pub fn new(x: SVector<f32,2>) -> Monster {
+        let bob_phase = rand::thread_rng().gen_range(0..100) as f32;
+        Monster{x: x,
+                v: SVector::<f32,2>::new(0.0,0.0),
+                bob_phase: bob_phase,
+                above_ground: BOB_AMPLITUDE*bob_phase.sin(),
+                dead_timer: 0}
+    }
+    pub fn die(self: &mut Monster){self.dead_timer = DEATH_TIME;}
+    pub fn think_and_move(self: &mut Monster, target: &Player,
+                          level: &Level, dt: i32){
+        // If dead, countdown until respawning.
+        if(self.dead_timer > 0){
+            self.dead_timer -= dt;
+            if(self.dead_timer <= 0){
+                self.dead_timer = 0;
+                let spawn_index
+                    = rand::thread_rng().gen_range(0..(level.spawns.len()));
+                self.x = level.spawns[spawn_index];
+            }
+            return;
+        } // end if dead
+        if((self.x - target.x).norm() < PLAYER_R){
+            self.die();
+
+            // TODO: Update player health/score.
+
+            return;
+        } // end if colliding player
+        self.bob_phase += BOB_SPEED*(dt as f32);
+        self.above_ground = BOB_AMPLITUDE*(1.0 + self.bob_phase.sin());
+
+        // Set trial velocity based on player location:
+        for i in 0..2 {
+            let dx_i = self.x[i] - target.x[i];
+            if(dx_i.abs() > (PLAYER_R + MONSTER_R)){
+                self.v[i] = -MONSTER_SPEED*(dx_i/dx_i.abs());
+            }
+        } // i
+        self.x += (dt as f32)*self.v;
+
+        for wall in &level.walls {
+            let x = wall.closest_point(&(self.x));
+            let orthog = self.x - x;
+            let dist = orthog.norm();
+            if(dist < MONSTER_R){self.x = x + (MONSTER_R/dist)*orthog;}
+        } // wall
+    }
+}
+
+fn collide_monster_pair(monsters: &mut Vec<Monster>, i: usize, j: usize){
+    let x_i = monsters[i].x;
+    let x_j = monsters[j].x;
+    let dx = x_i - x_j;
+    let norm_dx = dx.norm();
+    if(norm_dx > 2.0*MONSTER_R){return;}
+    let x_mid = 0.5*(x_i + x_j);
+    let dx_hat = (1.0/norm_dx)*dx;
+    let x_i_out = x_mid + MONSTER_R*dx_hat;
+    let x_j_out = x_mid - MONSTER_R*dx_hat;
+    monsters[i].x += MONSTER_COLLISION_DAMP*(x_i_out - x_i);
+    monsters[j].x += MONSTER_COLLISION_DAMP*(x_j_out - x_j);
+}
+
+// Brute-force $O(n^2)$ collision detection between monsters:
+fn collide_monsters(monsters: &mut Vec<Monster>){
+    for iteration in 0..MONSTER_COLLISION_ITERS {
+        for i in 0..monsters.len(){
+            for j in (i+1)..monsters.len(){
+                collide_monster_pair(&mut monsters, i, j);
+            } // j
+        } // i
+    } // iteration
+}
+
 enum WallType {
     ConstantX,
     ConstantY,
@@ -635,28 +727,17 @@ fn main() -> Result<(), String> {
 
     let mut level = Level::new(&inner_wall_texture, &outer_wall_texture,
                                &floor_texture, &sky_texture);
-    // level.add_wall(WallType::ConstantY, x1, x2, constant_y,
-    //                &inner_wall_texture);
-    // level.add_wall(WallType::ConstantX, y1, y2, constant_x,
-    //                &outer_wall_texture);
-
-    // let n_wall = 100;
-    // for i in 0..n_wall{
-    //     level.add_wall(WallType::ConstantY, x1, x2,
-    //                    constant_y + (WALL_H as f32)*(i as f32),
-    //                    &outer_wall_texture);
-    //     level.add_wall(WallType::ConstantX, y1, y2,
-    //                    constant_x + (WALL_H as f32)*(i as f32),
-    //                    &inner_wall_texture);
-    // }
-
     level.add_walls_randomly();
+
+    let mut monsters = Vec::<Monster>::new();
+    for spawn in &level.spawns {
+        monsters.push(Monster::new(*spawn));
+    } // i
 
     let x = 0.5*(WALL_H as f32);
     let y = 0.5*(WALL_H as f32);
     let above_ground = 0.1*(WALL_H as f32);
-    let scale = 3.5;
-    let sprite = Sprite::new(&monster_sprite, x, y, above_ground, scale);
+    let sprite_scale = 3.5;
 
     // Main game loop:
     loop {
@@ -688,8 +769,15 @@ fn main() -> Result<(), String> {
                                  0.0, FLOOR_TILE_W,
                                  0.0, FLOOR_TILE_W, &mut z_buffer);
 
-        // Draw the single test sprite:
-        sprite.render(&player, &mut draw_surf, &mut z_buffer);
+        for monster in &mut monsters {
+            monster.think_and_move(&player, &level, dt as i32);
+            let sprite = Sprite::new(&monster_sprite,
+                                     monster.x[0], monster.x[1],
+                                     monster.above_ground, sprite_scale);
+            sprite.render(&player, &mut draw_surf, &mut z_buffer);
+        } // monster
+
+        collide_monsters(monsters);
 
         // Draw sky last:
         transform_and_draw_sky(&player, &sky_texture, &mut draw_surf,
