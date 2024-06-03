@@ -50,6 +50,7 @@ static SENSITIVITY: f32 = 0.003;
 static PL_PROJ_SPEED: f32 = 1.7;
 static PL_PROJ_MAX_FLIGHT_TIME: i32 = 3000;
 static PL_PROJ_R: f32 = 50.0;
+static PL_PROJ_SPLASH_TIME: i32 = 250;
 static PL_GUN_SCREEN_FRAC: f32 = 0.3;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
@@ -363,24 +364,30 @@ fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
 
 struct Projectile<'a> {
     pub sprite: &'a Surface<'a>,
+    pub splash_sprite: &'a Surface<'a>,
     pub x: SVector<f32,3>,
     pub v: SVector<f32,3>,
     pub ready: bool,
     pub flight_time: i32,
+    pub splash_time: i32,
 }
 
 impl<'a> Projectile<'a> {
-    pub fn new(sprite: &'a Surface<'a>) -> Projectile<'a> {
-        Projectile{sprite: sprite,
+    pub fn new(sprite: &'a Surface<'a>,
+               splash_sprite: &'a Surface<'a>) -> Projectile<'a> {
+        Projectile{sprite: sprite, splash_sprite: splash_sprite,
                    x: SVector::<f32,3>::new(0.0,0.0,0.0),
                    v: SVector::<f32,3>::new(0.0,0.0,0.0),
                    ready: true,
-                   flight_time: 0,}
+                   flight_time: 0, splash_time: 0,}
     }
     pub fn reset(&mut self){
         self.ready = true;
+        self.splash_time = PL_PROJ_SPLASH_TIME;
     }
     pub fn advance(self: &mut Projectile<'a>, dt: i32){
+        if(self.splash_time < 0){self.splash_time = 0;}
+        if(self.splash_time > 0){self.splash_time -= dt;}
         if(self.ready){return;}
         self.flight_time += dt;
         if(self.flight_time > PL_PROJ_MAX_FLIGHT_TIME){self.reset();}
@@ -422,6 +429,7 @@ struct Player<'a> {
 
 impl<'a> Player<'a> {
     fn new(projectile_sprite: &'a Surface<'a>,
+           projectile_splash_sprite: &'a Surface<'a>,
            gun_sprite: &'a Surface<'a>,
            gun_ready_sprite: &'a Surface <'a>,) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
@@ -432,7 +440,8 @@ impl<'a> Player<'a> {
                r: 0,
                u: 0,
                d: 0,
-               projectile: Projectile::new(projectile_sprite),
+               projectile: Projectile::new(projectile_sprite,
+                                           projectile_splash_sprite),
                gun_sprite: gun_sprite,
                gun_ready_sprite: gun_ready_sprite,
                score: SCORE_START}
@@ -477,6 +486,7 @@ impl<'a> Player<'a> {
         self.projectile.x += (NEAR_Z/PL_PROJ_SPEED)*self.projectile.v;
         self.projectile.ready = false;
         self.projectile.flight_time = 0;
+        self.projectile.splash_time = 0;
     }
     pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
                                      z_buffer: &mut DMatrix<f32>){
@@ -490,6 +500,12 @@ impl<'a> Player<'a> {
                                  (H - (gun_screen_h as u32))
                                  .try_into().unwrap(),
                                  gun_screen_w as u32, gun_screen_h as u32);
+        if(self.projectile.splash_time > 0){
+            transform_and_draw_sprite(self.projectile.splash_sprite, dest,
+                                      &self.projectile.x,
+                                      2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
+                                      self, z_buffer);
+        }
         // TODO: Have different gun sprites based on whether projectile is
         // ready to fire.
         if(self.projectile.ready){
@@ -662,6 +678,7 @@ struct TextureSet<'a> {
     monster_sprite: Surface<'a>,
     monster_dead_sprite: Surface<'a>,
     projectile_sprite: Surface<'a>,
+    projectile_splash_sprite: Surface<'a>,
     gun_sprite: Surface<'a>,
     gun_ready_sprite: Surface<'a>,
 }
@@ -682,7 +699,9 @@ impl<'a> TextureSet<'a> {
             monster_dead_sprite: load_image_with_format
                 (directory.clone()+"/deadimg.bmp", format),
             projectile_sprite: load_image_with_format
-                (directory.clone()+"/projimg.bmp", format),
+                (directory.clone()+"/projectile.png", format),
+            projectile_splash_sprite: load_image_with_format
+                (directory.clone()+"/projectile_splash.png", format),
             gun_sprite: load_image_with_format
                 (directory.clone()+"/gun.png", format),
             gun_ready_sprite: load_image_with_format
@@ -876,6 +895,7 @@ impl<'a> Game<'a> {
                                            &texture_set.floor_texture,
                                            &texture_set.sky_texture),
                    player: Player::<'a>::new(&texture_set.projectile_sprite,
+                                             &texture_set.projectile_splash_sprite,
                                              &texture_set.gun_sprite,
                                              &texture_set.gun_ready_sprite),
                    monsters: Vec::<Monster<'a>>::new()};
