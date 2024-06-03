@@ -18,6 +18,8 @@ use nalgebra::SMatrix;
 use nalgebra::DMatrix;
 use nalgebra::SVector;
 
+use rand::Rng;
+
 use std::cmp::max;
 use std::cmp::min;
 use std::ffi::c_void;
@@ -30,8 +32,7 @@ static H: u32 = 480;
 static FAR_Z: f32 = std::f32::MAX;
 static NEAR_Z: f32 = 100.0;
 static WALL_H: i32 = 480;
-//static FLOOR_W: f32 = 4320.0;
-static FLOOR_W: f32 = (WALL_H as f32);
+static FLOOR_TILE_W: f32 = (WALL_H as f32);
 static PLAYER_SPEED: f32 = 1.2;
 static PLAYER_R: f32 = 150.0;
 static SENSITIVITY: f32 = 0.003;
@@ -469,17 +470,95 @@ impl<'a> Sprite<'a> {
 
 struct Level<'a> {
     pub walls: Vec::<Wall<'a>>,
+    pub spawns: Vec::<SVector<f32,2>>,
+    pub texture1: &'a Surface<'a>,
+    pub texture2: &'a Surface<'a>,
+    pub floor_texture: &'a Surface<'a>,
+    pub sky_texture: &'a Surface<'a>,
 }
 
 impl<'a> Level<'a> {
-    pub fn new() -> Level<'a> {
-        Level{walls: Vec::<Wall>::new()}
+    pub fn new(texture1: &'a Surface<'a>,
+               texture2: &'a Surface<'a>,
+               floor_texture: &'a Surface<'a>,
+               sky_texture: &'a Surface<'a>,) -> Level<'a> {
+        Level{walls: Vec::<Wall>::new(),
+              spawns: Vec::<SVector<f32,2>>::new(),
+              texture1: texture1,
+              texture2: texture2,
+              floor_texture: floor_texture,
+              sky_texture: sky_texture}
     }
     pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
                     start: f32, end: f32,
                     constant: f32, texture: &'a Surface<'a>){
         self.walls.push(Wall::new(wall_type, start, end, constant, texture));
     }
+
+    pub fn add_pillar(self: &mut Level<'a>, x: SVector<f32,2>){
+        // Index of random corner to be moved to center:
+        let move_index = 2*(rand::thread_rng().gen_range(0..4));
+        let mut pts = Vec::<SVector<f32,2>>::new();
+        // Generate points in order:
+        let WHF = WALL_H as f32;
+        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]+WHF));
+        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]+2.0*WHF));
+        pts.push(SVector::<f32,2>::new(x[0]+WHF    ,x[1]+2.0*WHF));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]+2.0*WHF));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]+WHF));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]+WHF    ,x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]));
+        // Move one toward the center and add a spawn point where it used
+        // to be:
+        let temp_pt = pts[move_index];
+        pts[move_index] = SVector::<f32,2>::new(x[0]+WHF, x[1]+WHF);
+        let spawn_pt = 0.5*(temp_pt + pts[move_index]);
+        self.spawns.push(spawn_pt);
+        if((move_index == 0) || (move_index == 8)){
+            pts[8] = SVector::<f32,2>::new(x[0]+WHF, x[1]+WHF);
+        }
+        for i in 1..9 {
+            if(pts[i][0] == pts[i-1][0]){
+                self.add_wall(WallType::ConstantX, pts[i-1][1], pts[i][1],
+                              pts[i][0], self.texture1);
+            }else{
+                self.add_wall(WallType::ConstantY, pts[i-1][0], pts[i][0],
+                              pts[i][1], self.texture1);
+            } // if/else
+        } // i
+    }
+
+    pub fn add_walls_randomly(self: &mut Level<'a>){
+        self.walls = Vec::<Wall>::new();
+        self.spawns = Vec::<SVector<f32,2>>::new();
+        let mut last_col: i32 = -1;
+        let mut col: i32 = -1;
+        let mut factor: f32 = 6.0;
+        let WHF = WALL_H as f32;
+        for i in 0..3 {
+            loop {
+                col = rand::thread_rng().gen_range(0..4) as i32;
+                if(col != last_col){break;}
+            } // loop
+            last_col = col;
+            if(i > 1){factor = 2.0;}
+            self.add_pillar(SVector::<f32,2>::new(2.0*(col as f32)*WHF,
+                                                  factor*WHF));
+        } // i
+        for i in 0..9 {
+            self.add_wall(WallType::ConstantX, (i as f32)*WHF,
+                          ((i+1) as f32)*WHF, 0.0, self.texture2);
+            self.add_wall(WallType::ConstantX, (i as f32)*WHF,
+                          ((i+1) as f32)*WHF, 9.0*WHF, self.texture2);
+            self.add_wall(WallType::ConstantY, (i as f32)*WHF,
+                          ((i+1) as f32)*WHF, 0.0, self.texture2);
+            self.add_wall(WallType::ConstantY, (i as f32)*WHF,
+                          ((i+1) as f32)*WHF, 9.0*WHF, self.texture2);
+        } // i
+    }
+
     pub fn draw_all_walls(&self, dest: &mut Surface,
                           z_buffer: &mut DMatrix<f32>,
                           player: &Player){
@@ -539,6 +618,7 @@ fn main() -> Result<(), String> {
     let monster_sprite: Surface
         = load_image_with_format("data/monster.bmp".to_string(), format);
     let mut player = Player::new();
+    player.x = SVector::<f32,2>::new(200.0, 200.0);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
@@ -553,24 +633,27 @@ fn main() -> Result<(), String> {
     let constant_y = y1;
     let constant_x = x1;
 
-    let mut level = Level::new();
-    level.add_wall(WallType::ConstantY, x1, x2, constant_y,
-                   &inner_wall_texture);
-    level.add_wall(WallType::ConstantX, y1, y2, constant_x,
-                   &outer_wall_texture);
+    let mut level = Level::new(&inner_wall_texture, &outer_wall_texture,
+                               &floor_texture, &sky_texture);
+    // level.add_wall(WallType::ConstantY, x1, x2, constant_y,
+    //                &inner_wall_texture);
+    // level.add_wall(WallType::ConstantX, y1, y2, constant_x,
+    //                &outer_wall_texture);
 
-    let n_wall = 100;
-    for i in 0..n_wall{
-        level.add_wall(WallType::ConstantY, x1, x2,
-                       constant_y + (WALL_H as f32)*(i as f32),
-                       &outer_wall_texture);
-        level.add_wall(WallType::ConstantX, y1, y2,
-                       constant_x + (WALL_H as f32)*(i as f32),
-                       &inner_wall_texture);
-    }
+    // let n_wall = 100;
+    // for i in 0..n_wall{
+    //     level.add_wall(WallType::ConstantY, x1, x2,
+    //                    constant_y + (WALL_H as f32)*(i as f32),
+    //                    &outer_wall_texture);
+    //     level.add_wall(WallType::ConstantX, y1, y2,
+    //                    constant_x + (WALL_H as f32)*(i as f32),
+    //                    &inner_wall_texture);
+    // }
 
-    let x = 1.0*(WALL_H as f32);
-    let y = 2.0*(WALL_H as f32);
+    level.add_walls_randomly();
+
+    let x = 0.5*(WALL_H as f32);
+    let y = 0.5*(WALL_H as f32);
     let above_ground = 0.1*(WALL_H as f32);
     let scale = 3.5;
     let sprite = Sprite::new(&monster_sprite, x, y, above_ground, scale);
@@ -602,7 +685,8 @@ fn main() -> Result<(), String> {
 
         // Draw the level's floor:
         transform_and_draw_floor(&floor_texture, &mut draw_surf, &player,
-                                 0.0, FLOOR_W, 0.0, FLOOR_W, &mut z_buffer);
+                                 0.0, FLOOR_TILE_W,
+                                 0.0, FLOOR_TILE_W, &mut z_buffer);
 
         // Draw the single test sprite:
         sprite.render(&player, &mut draw_surf, &mut z_buffer);
