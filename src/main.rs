@@ -29,6 +29,10 @@ use std::process::exit;
 // Some global constants:
 static W: u32 = 640;
 static H: u32 = 480;
+// static W: u32 = 1024;
+// static H: u32 = 768;
+// static W: u32 = 320;
+// static H: u32 = 240;
 static FAR_Z: f32 = std::f32::MAX;
 static NEAR_Z: f32 = 100.0;
 static WALL_H: i32 = 480;
@@ -40,10 +44,9 @@ static PL_PROJ_SPEED: f32 = 1.3;
 static PLAYER_ACCEL: f32 = 7e-3;
 static MOVE_DAMP_TIMESCALE: f32 = 300.0;
 static BOB_AMPLITUDE: f32 = 30.0;
-static BOB_SPEED: f32 = 0.004;
+static BOB_SPEED: f32 = 0.007;
 static MONSTER_SPEED: f32 = 0.6;
 static MONSTER_R: f32 = 150.0;
-static MAX_MONSTERS: i32 = 4;
 static MONSTER_COLLISION_DAMP: f32 = 0.5;
 static MONSTER_COLLISION_ITERS: i32 = 7;
 static DEATH_TIME: i32 = 300;
@@ -131,9 +134,9 @@ fn transform_and_draw_sky(player: &Player, sky: &Surface,
                                               -x_pitch[0]*sin_yaw
                                               + x_pitch[2]*cos_yaw);
             let x = SVector::<f32,3>::new(x_yaw[0], x_yaw[2], -x_yaw[1]);
+            // No sky below horizon.
+            if(x[2] < 0.0){continue;}
             let phi = x[2].atan2((x[0]*x[0] + x[1]*x[1]).sqrt());
-            // No sky below horizontal.
-            if(phi < 0.0){continue;}
             // Positive theta goes to right of player for y-axis pointing
             // out of screen.
             let theta = x[0].atan2(x[1]);
@@ -269,20 +272,16 @@ fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
 }
 
 fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
-                             player: &Player, x: f32, y: f32, scale: f32,
-                             above_ground: f32, z_buffer: &mut DMatrix<f32>){
-    let s_w = (source.width() as f32)*scale;
-    let s_h = (source.height() as f32)*scale;
-    let z = 0.5*(WALL_H as f32) - 0.5*s_h - above_ground;
-    let xyz = SVector::<f32,3>::new(x, y, z);
-    let xyz_trans = transform_for_player(&xyz, player);
-    let x_trans = xyz_trans[0];
-    let y_trans = xyz_trans[1];
-    let z_trans = xyz_trans[2];
+                             x: &SVector<f32,3>, width: f32, height: f32,
+                             player: &Player, z_buffer: &mut DMatrix<f32>){
+    let x_trans = transform_for_player(&x, player);
     // Define surface to always face player after transforming center point:
-    let x0 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans-0.5*s_h, z_trans);
-    let x1 = SVector::<f32,3>::new(x_trans+0.5*s_w, y_trans-0.5*s_h, z_trans);
-    let x2 = SVector::<f32,3>::new(x_trans-0.5*s_w, y_trans+0.5*s_h, z_trans);
+    let x0 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
+                                   x_trans[1]-0.5*height, x_trans[2]);
+    let x1 = SVector::<f32,3>::new(x_trans[0]+0.5*width,
+                                   x_trans[1]-0.5*height, x_trans[2]);
+    let x2 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
+                                   x_trans[1]+0.5*height, x_trans[2]);
     render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true, false);
 }
 
@@ -402,25 +401,33 @@ impl Player {
     }
 }
 
-struct Monster {
+struct Monster<'a> {
+    pub texture: &'a Surface<'a>,
     pub x: SVector<f32,2>,
     pub v: SVector<f32,2>,
-    pub above_ground: f32,
+    pub z: f32, // Separated out from 2D movement physics with `x` and `v`.
     pub bob_phase: f32,
     pub dead_timer: i32,
 }
 
-impl Monster {
-    pub fn new(x: SVector<f32,2>) -> Monster {
+impl<'a> Monster<'a> {
+    pub fn new(texture: &'a Surface<'a>, x: SVector<f32,2>) -> Monster<'a> {
         let bob_phase = rand::thread_rng().gen_range(0..100) as f32;
-        Monster{x: x,
+        Monster{texture: texture, x: x,
                 v: SVector::<f32,2>::new(0.0,0.0),
                 bob_phase: bob_phase,
-                above_ground: BOB_AMPLITUDE*bob_phase.sin(),
+                z: BOB_AMPLITUDE*bob_phase.sin(),
                 dead_timer: 0}
     }
-    pub fn die(self: &mut Monster){self.dead_timer = DEATH_TIME;}
-    pub fn think_and_move(self: &mut Monster, target: &Player,
+    pub fn render(self: &mut Monster<'a>, dest: &mut Surface,
+                  player: &Player, z_buffer: &mut DMatrix<f32>){
+        let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
+        transform_and_draw_sprite(self.texture, dest, &x_center,
+                                  2.0*MONSTER_R, 2.0*MONSTER_R,
+                                  player, z_buffer);
+    }
+    pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
+    pub fn think_and_move(self: &mut Monster<'a>, target: &Player,
                           level: &Level, dt: i32){
         // If dead, countdown until respawning.
         if(self.dead_timer > 0){
@@ -441,7 +448,7 @@ impl Monster {
             return;
         } // end if colliding player
         self.bob_phase += BOB_SPEED*(dt as f32);
-        self.above_ground = BOB_AMPLITUDE*(1.0 + self.bob_phase.sin());
+        self.z = BOB_AMPLITUDE*(1.0 + self.bob_phase.sin());
 
         // Set trial velocity based on player location:
         for i in 0..2 {
@@ -480,7 +487,7 @@ fn collide_monsters(monsters: &mut Vec<Monster>){
     for iteration in 0..MONSTER_COLLISION_ITERS {
         for i in 0..monsters.len(){
             for j in (i+1)..monsters.len(){
-                collide_monster_pair(&mut monsters, i, j);
+                collide_monster_pair(monsters, i, j);
             } // j
         } // i
     } // iteration
@@ -536,29 +543,6 @@ impl<'a> Wall<'a> {
         }
     }
 } // impl Wall
-
-struct Sprite<'a> {
-    pub img: &'a Surface<'a>,
-    pub x: f32,
-    pub y: f32,
-    pub above_ground: f32,
-    pub scale: f32,
-}
-
-impl<'a> Sprite<'a> {
-    pub fn new(img: &'a Surface<'a>, x: f32, y: f32,
-               above_ground: f32, scale: f32) -> Sprite {
-        return Sprite{img: img, x: x, y: y, above_ground: above_ground,
-                      scale: scale};
-    }
-
-    pub fn render(self: &Sprite<'a>, player: &Player,
-                  dest: &mut Surface, z_buffer: &mut DMatrix<f32>){
-        transform_and_draw_sprite(self.img, dest, player, self.x, self.y,
-                                  self.scale, self.above_ground, z_buffer);
-    }
-}
-
 
 struct Level<'a> {
     pub walls: Vec::<Wall<'a>>,
@@ -731,13 +715,8 @@ fn main() -> Result<(), String> {
 
     let mut monsters = Vec::<Monster>::new();
     for spawn in &level.spawns {
-        monsters.push(Monster::new(*spawn));
+        monsters.push(Monster::new(&monster_sprite, *spawn));
     } // i
-
-    let x = 0.5*(WALL_H as f32);
-    let y = 0.5*(WALL_H as f32);
-    let above_ground = 0.1*(WALL_H as f32);
-    let sprite_scale = 3.5;
 
     // Main game loop:
     loop {
@@ -771,13 +750,10 @@ fn main() -> Result<(), String> {
 
         for monster in &mut monsters {
             monster.think_and_move(&player, &level, dt as i32);
-            let sprite = Sprite::new(&monster_sprite,
-                                     monster.x[0], monster.x[1],
-                                     monster.above_ground, sprite_scale);
-            sprite.render(&player, &mut draw_surf, &mut z_buffer);
+            monster.render(&mut draw_surf, &player, &mut z_buffer);
         } // monster
 
-        collide_monsters(monsters);
+        collide_monsters(&mut monsters);
 
         // Draw sky last:
         transform_and_draw_sky(&player, &sky_texture, &mut draw_surf,
