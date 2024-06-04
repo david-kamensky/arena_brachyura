@@ -63,8 +63,8 @@ impl<'a> Projectile<'a> {
     pub fn collide_with_level(&mut self, level: &Level){
         if(self.ready){return;}
         // Check collision with floor, or flying out into sky.
-        if(self.x[2] < (-0.5*(WALL_H as f32))){self.reset(); return;}
-        if(self.x[2] > (0.5*(WALL_H as f32))){
+        if(self.x[2] < (-0.5*(WALL_H as f32) + PL_PROJ_R)){self.reset(); return;}
+        if(self.x[2] > (0.5*(WALL_H as f32) - PL_PROJ_R)){
             if(level.has_ceiling){self.reset();}
             return;
         }
@@ -387,12 +387,17 @@ impl<'a> Monster<'a> {
     }
 }
 
+static MONSTER_COLLISION_EPS: f32 = 1e-3;
 pub fn collide_monster_pair(monsters: &mut Vec<Monster>, i: usize, j: usize){
+    if(monsters[i].dead() || monsters[j].dead()){return;}
     let x_i = monsters[i].x;
     let x_j = monsters[j].x;
     let dx = x_i - x_j;
     let norm_dx = dx.norm();
     if(norm_dx > 2.0*MONSTER_R){return;}
+    // If they're too close together, spawn-kill one of them and let it respawn somewhere else;
+    // otherwise the small division behaves erratically.
+    if(norm_dx < (MONSTER_COLLISION_EPS*MONSTER_R)){monsters[i].die(); return;}
     let x_mid = 0.5*(x_i + x_j);
     let dx_hat = (1.0/norm_dx)*dx;
     let x_i_out = x_mid + MONSTER_R*dx_hat;
