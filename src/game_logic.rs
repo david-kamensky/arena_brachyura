@@ -10,6 +10,9 @@ use sdl2::surface::Surface;
 use sdl2::image::LoadSurface;
 use sdl2::mouse::MouseButton;
 use sdl2::rect::Rect;
+use sdl2::render::Canvas;
+use sdl2::render::Texture;
+use sdl2::video::Window;
 
 use nalgebra::DMatrix;
 use nalgebra::SVector;
@@ -109,6 +112,7 @@ pub struct Player<'a> {
     pub minimap_cover: &'a Surface<'a>,
 }
 
+static PITCH_EPS: f32 = 1e-6;
 impl<'a> Player<'a> {
     pub fn new(texture_set: &'a TextureSet<'a>) -> Player<'a> {
         Player{x: SVector::<f32,2>::new(0.0,0.0),
@@ -140,8 +144,8 @@ impl<'a> Player<'a> {
                 => return true,
                 Event::MouseMotion{xrel, yrel, .. }
                 => {self.yaw += (xrel as f32)*SENSITIVITY;
-                    self.pitch = f32::max(-0.5*PI,
-                                          f32::min(0.5*PI, self.pitch
+                    self.pitch = f32::max(-0.5*PI + PITCH_EPS,
+                                          f32::min(0.5*PI - PITCH_EPS, self.pitch
                                                    + (yrel as f32)
                                                    *SENSITIVITY))},
                 Event::MouseButtonDown{mouse_btn: MouseButton::Left, .. }
@@ -726,10 +730,64 @@ pub fn load_image_with_format(filename: String,
 }
 
 pub enum GameState {
+    Starting,
     Quit,
     Continue,
     Win,
     Lose,
+}
+
+pub enum MenuChoice {
+    Wait,
+    Quit,
+    Continue,
+}
+
+pub struct Menu<'a> {
+    pub state: GameState,
+    pub image: Surface<'a>,
+}
+
+impl<'a> Menu<'a> {
+    pub fn new(state: GameState,) -> Menu<'a> {
+        let mut filename: String = match state {
+            GameState::Starting => (DATA_ROOT.to_owned() + "/menu_screens/start_screen.png").to_string(),
+            GameState::Win => (DATA_ROOT.to_owned() + "/menu_screens/win_screen.png").to_string(),
+            GameState::Lose => (DATA_ROOT.to_owned() + "/menu_screens/lose_screen.png").to_string(),
+            _ => "".to_string(), // NOTE: Should be unreachable; `Menu` only created for above states.
+        };
+        Menu{state: state, image: <Surface as LoadSurface>::from_file(filename).unwrap()}
+    }
+    // Press escape to quit, space to continue.
+    pub fn process_input(&self, event_pump: &mut EventPump) -> MenuChoice {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit{..} |
+                Event::KeyDown{keycode: Some(Keycode::Escape), .. }
+                => return MenuChoice::Quit,
+                Event::KeyDown{keycode: Some(Keycode::Space), .. }
+                => return MenuChoice::Continue,
+                _ => {}
+            } // match
+        } // for
+        return MenuChoice::Wait;
+    }
+    // Busy-waiting until quit/continue choice is made.
+    pub fn wait_loop(&self, event_pump: &mut EventPump, canvas: &mut Canvas<Window>) -> bool {
+        let texture_creator = canvas.texture_creator();
+        let texture = Texture::from_surface(&self.image, &texture_creator).unwrap();
+        canvas.copy(&texture, None, None);
+        canvas.present();
+        loop {
+            match self.process_input(event_pump) {
+                MenuChoice::Wait => {},
+                MenuChoice::Quit => {return true;},
+                MenuChoice::Continue => {return false;}
+            }
+        }
+        // Should be unreachable.
+        return true;
+    }
 }
 
 pub struct Game<'a> {
@@ -737,21 +795,24 @@ pub struct Game<'a> {
     pub player: Player<'a>,
     pub level: Level<'a>,
     pub parameters: &'a GameParameters,
+    pub cmd_args: &'a CmdArgs,
 }
 
 impl<'a> Game<'a> {
-    pub fn new(parameters: &'a GameParameters,
+    pub fn new(parameters: &'a GameParameters, cmd_args: &'a CmdArgs,
                texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
         let mut new_game
-            = Game{parameters: parameters,
+            = Game{parameters: parameters, cmd_args: cmd_args,
                    level: Level::<'a>::new(texture_set, parameters),
                    player: Player::<'a>::new(texture_set),
                    monsters: Vec::<Monster<'a>>::new()};
         new_game.level.add_walls_randomly(rng);
-        for spawn in &new_game.level.spawns {
-            new_game.monsters.push(Monster::new(texture_set, *spawn, rng));
-        } // i
+        if(!(cmd_args.no_monsters)){
+            for spawn in &new_game.level.spawns {
+                new_game.monsters.push(Monster::new(texture_set, *spawn, rng));
+            } // i
+        }
         new_game.player.x = PLAYER_START;
         return new_game;
     }
@@ -774,7 +835,9 @@ impl<'a> Game<'a> {
                                                 &mut self.player);
         self.player.projectile.advance(dt);
         self.player.projectile.collide_with_level(&self.level);
-        self.player.score -= SCORE_DECAY_RATE*(dt as f32);
+        if(!(self.cmd_args.no_score_decay)){
+            self.player.score -= SCORE_DECAY_RATE*(dt as f32);
+        }
         return GameState::Continue;
     }
 
@@ -786,6 +849,8 @@ impl<'a> Game<'a> {
         let minimap_y = (H as i32) - minimap_w;
         let minimap_rect = Rect::new(minimap_x, minimap_y, minimap_w as u32, minimap_w as u32);
         draw_surf.fill_rect(minimap_rect, Color::RGB(16,16,16));
+        let minimap_center = SVector::<f32,2>::new((minimap_x as f32) + 0.5*(minimap_w as f32),
+                                                   (minimap_y as f32) + 0.5*(minimap_w as f32));
         for monster in &self.monsters {
             if(monster.dead()){continue;}
             let x_monst_trans = monster.x - self.player.x;
@@ -794,8 +859,6 @@ impl<'a> Game<'a> {
             let x_monst = SVector::<f32,2>::new(x_monst_trans[0]*cos_yaw - x_monst_trans[1]*sin_yaw,
                                                 -(x_monst_trans[0]*sin_yaw + x_monst_trans[1]*cos_yaw));
             let minimap_r = 8.0*(WALL_H as f32);
-            let minimap_center = SVector::<f32,2>::new((minimap_x as f32) + 0.5*(minimap_w as f32),
-                                                       (minimap_y as f32) + 0.5*(minimap_w as f32));
             let x_monst_screen = 0.5*(minimap_w as f32)*x_monst/minimap_r + minimap_center;
             if(((x_monst_screen[0] as i32) > (minimap_x + minimap_dot_w/2)) &&
                ((x_monst_screen[1] as i32) > (minimap_y + minimap_dot_w/2))){
@@ -804,11 +867,11 @@ impl<'a> Game<'a> {
                                            minimap_dot_w as u32, minimap_dot_w as u32);
                 draw_surf.fill_rect(monst_rect, Color::RGB(255,0,0));
             }
-            let player_rect = Rect::new((minimap_center[0] as i32) - minimap_dot_w/2,
-                                        (minimap_center[1] as i32) - minimap_dot_w/2,
-                                        minimap_dot_w as u32, minimap_dot_w as u32);
-            draw_surf.fill_rect(player_rect, Color::RGB(0,255,0));
         } // monster
+        let player_rect = Rect::new((minimap_center[0] as i32) - minimap_dot_w/2,
+                                    (minimap_center[1] as i32) - minimap_dot_w/2,
+                                    minimap_dot_w as u32, minimap_dot_w as u32);
+        draw_surf.fill_rect(player_rect, Color::RGB(0,255,0));
 
         // Add cover over minimap:
         draw_sprite_2d(&self.player.minimap_cover, draw_surf, &minimap_rect, z_buffer);
@@ -875,6 +938,8 @@ pub fn data_filename(name: &str) -> String {
 pub struct CmdArgs {
     pub level: u32,
     pub windowed: bool,
+    pub no_monsters: bool,
+    pub no_score_decay: bool,
 }
 
 impl CmdArgs {
@@ -886,6 +951,8 @@ impl CmdArgs {
         // Default values of arguments:
         let mut level = 0;
         let mut windowed = false;
+        let mut no_monsters = false;
+        let mut no_score_decay = false;
 
         for i in 0..argc {
             if(skip_arg){skip_arg = false; continue;}
@@ -897,8 +964,12 @@ impl CmdArgs {
                 }
             }else if(argv[i] == "--windowed"){
                 windowed = true;
+            }else if(argv[i] == "--no_monsters"){
+                no_monsters = true;
+            }else if(argv[i] == "--no_score_decay"){
+                no_score_decay = true;
             }
         } // i
-        return CmdArgs{level: level, windowed: windowed};
+        return CmdArgs{level: level, windowed: windowed, no_monsters: no_monsters, no_score_decay: no_score_decay};
     }
 }

@@ -45,6 +45,7 @@ pub static PLAYER_START: SVector<f32,2> = SVector::<f32,2>::new(200.0,200.0);
 pub static DATA_ROOT: &str = "data/";
 pub static DEFAULT_TEXTURE_PATH: &str = "default_textures/";
 pub static PARAM_FILENAME: &str = "params.cfg";
+pub static INITIAL_DT: i32 = 10;
 
 pub static PI: f32 = std::f32::consts::PI;
 

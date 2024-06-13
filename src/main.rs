@@ -69,23 +69,33 @@ fn main() -> Result<(), String> {
     let mut level_seed: u64 = start_level as u64;
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
-    let mut game = Game::new(&parameters, &texture_set, &mut rng);
+    let mut game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);
 
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
 
     let timer = sdl_context.timer()?;
-    let mut dt: i32 = 10;
-    let mut t: i32 = 0;
+    let mut dt: i32 = INITIAL_DT;
+
+    let menu = Menu::new(GameState::Starting);
+    if(menu.wait_loop(&mut event_pump, &mut canvas)){
+        sdl_context.sdldrop();
+        return Ok(());
+    }
 
     // Main game loop:
     loop {
         let mut t_start: i32 = timer.ticks() as i32;
         let game_state = game.update_state(dt, &mut event_pump, &mut rng);
         match game_state {
+            GameState::Starting => {},
             GameState::Quit => break,
             GameState::Win
-                => {// Restart with a new random seed after winning:
+                => {let menu = Menu::new(game_state);
+                    if(menu.wait_loop(&mut event_pump, &mut canvas)){break;}
+                    // Restart with a new random seed after winning:
                     level_seed += 1;
+                    t_start = timer.ticks() as i32;
+                    dt = INITIAL_DT;
                     drop(game);
                     texture_set_index = ((level_seed as u32) % (n_texture_sets as u32)) as usize;
                     level_directory = &texture_set_list[texture_set_index];
@@ -93,11 +103,15 @@ fn main() -> Result<(), String> {
                     cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
                     parameters = GameParameters::new(data_filename(&cfg_filename));
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&parameters, &texture_set, &mut rng);},
+                    game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Lose
-                => {// Retry with the same random seed after losing:
+                => {let menu = Menu::new(game_state);
+                    if(menu.wait_loop(&mut event_pump, &mut canvas)){break;}
+                    // Retry with the same random seed after losing:
+                    t_start = timer.ticks() as i32;
+                    dt = INITIAL_DT;
                     rng = SmallRng::seed_from_u64(level_seed);
-                    game = Game::new(&parameters, &texture_set, &mut rng);},
+                    game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Continue => {},
         }
         game.render(&mut draw_surf, &mut z_buffer);
@@ -109,8 +123,6 @@ fn main() -> Result<(), String> {
         canvas.present();
 
         dt = (timer.ticks() as i32) - t_start;
-        t += dt;
-
     } // loop
 
     sdl_context.sdldrop();
