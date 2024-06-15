@@ -666,14 +666,14 @@ impl<'a> Level<'a> {
     pub fn add_walls_randomly(self: &mut Level<'a>, rng: &mut SmallRng){
         self.walls = Vec::<Wall>::new();
         self.spawns = Vec::<SVector<f32,2>>::new();
-        let mut last_col: i32 = -1;
         let mut col: i32 = -1;
         let mut factor: f32 = 6.0;
         let WHF = WALL_H as f32;
         // `n_row` x `n_col` grid cells:
         let n_row = 4;
         let n_col = 4;
-        let n_pillars_per_row = 2;
+        let mut layout = DMatrix::<u8>::zeros(n_row, n_col);
+        let n_pillars_per_row = 3; // Must be strictly less than `n_col` to avoid infinite loop.
         // Add pillars at random columns in each row:
         for row in 0..n_row {
             let mut n_pillars = n_pillars_per_row;
@@ -682,38 +682,27 @@ impl<'a> Level<'a> {
             for pillar in 0..n_pillars {
                 loop {
                     col = rng.gen_range(0..n_col) as i32;
-                    if((col != last_col)
-                       // Prevent adding pillar near origin, right where
-                       // player spawns, for fair start to game.
+                    if((layout[(row as usize,col as usize)] == 0)
+                       // Prevent adding pillar near origin, right where player spawns, for fair start to game.
                        && (!((row==0) && (col==0)))){break;}
                 } // loop
-                last_col = col;
-                self.add_pillar(SVector::<f32,2>::new
-                                ((4.0*(col as f32) + 1.0)*WHF,
-                                 (4.0*(row as f32) + 1.0)*WHF), rng);
+                layout[(row as usize, col as usize)] = 1;
+                self.add_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WHF, (4.0*(row as f32) + 1.0)*WHF), rng);
             } // pillar
         } // row
 
         // Exterior walls:
         for i in 0..(4*n_row) {
-            self.add_wall(WallType::ConstantX, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
-            self.add_wall(WallType::ConstantX, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 4.0*(n_col as f32)*WHF,
-                          self.outer_wall_texture);
+            self.add_wall(WallType::ConstantX, (i as f32)*WHF, ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
+            self.add_wall(WallType::ConstantX, (i as f32)*WHF, ((i+1) as f32)*WHF, 4.0*(n_col as f32)*WHF, self.outer_wall_texture);
         } // i
         for i in 0..(4*n_col) {
-            self.add_wall(WallType::ConstantY, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
-            self.add_wall(WallType::ConstantY, (i as f32)*WHF,
-                          ((i+1) as f32)*WHF, 4.0*(n_row as f32)*WHF,
-                          self.outer_wall_texture);
+            self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
+            self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 4.0*(n_row as f32)*WHF, self.outer_wall_texture);
         } // i
     }
 
-    pub fn draw_all_walls(&self, dest: &mut Surface,
-                          z_buffer: &mut DMatrix<f32>,
-                          player: &Player){
+    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, player: &Player){
         for w in self.walls.iter() {w.render(player, dest, z_buffer);}
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
@@ -723,9 +712,7 @@ impl<'a> Level<'a> {
     }
 }
 
-pub fn load_image_with_format(filename: String,
-                          format: PixelFormatEnum)
-                          -> Result<Surface<'static>, String> {
+pub fn load_image_with_format(filename: String, format: PixelFormatEnum) -> Result<Surface<'static>, String> {
     let orig_image = <Surface as LoadSurface>::from_file(filename);
     match orig_image {
         Err(error_message) => return Err(error_message),
@@ -755,9 +742,9 @@ pub struct Menu<'a> {
 impl<'a> Menu<'a> {
     pub fn new(state: GameState,) -> Menu<'a> {
         let mut filename: String = match state {
-            GameState::Starting => (DATA_ROOT.to_owned() + "/menu_screens/start_screen.png").to_string(),
-            GameState::Win => (DATA_ROOT.to_owned() + "/menu_screens/win_screen.png").to_string(),
-            GameState::Lose => (DATA_ROOT.to_owned() + "/menu_screens/lose_screen.png").to_string(),
+            GameState::Starting => data_filename("/menu_screens/start_screen.png"),
+            GameState::Win => data_filename("/menu_screens/win_screen.png"),
+            GameState::Lose => data_filename("/menu_screens/lose_screen.png"),
             _ => "".to_string(), // NOTE: Should be unreachable; `Menu` only created for above states.
         };
         Menu{state: state, image: <Surface as LoadSurface>::from_file(filename).unwrap()}
