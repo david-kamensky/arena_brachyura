@@ -7,6 +7,7 @@ use sdl2::video::WindowSurfaceRef;
 use sdl2::render::Texture;
 use sdl2::mouse::MouseButton;
 use sdl2::rect::Rect;
+use sdl2::pixels::PixelFormatEnum;
 
 use nalgebra::DMatrix;
 
@@ -50,9 +51,12 @@ fn main() -> Result<(), String> {
     let texture_creator = canvas.texture_creator();
     let mut event_pump = sdl_context.event_pump()?;
     let screen_surf = canvas.window_mut().surface(&event_pump)?;
-    // `draw_surf` is where everything is rendered. It is then copied to the canvas all at once.  Rendering directly to the Window surface is not
+    // NOTE: `draw_surf` is where everything is rendered. It is then copied to the canvas all at once.  Rendering directly to the Window surface is not
     // robust and leads to screen tearing and/or flickering.
-    let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), screen_surf.pixel_format_enum())?;
+    // NOTE: First three bytes of each pixel assumed to be RGB in low-level pixel operations; default for screen surface on only
+    // system tested, but may not be guaranteed in general.
+    let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB888)?;
+    //let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), screen_surf.pixel_format_enum())?;
     let draw_surf_rect = draw_surf.rect();
 
     let format = draw_surf.pixel_format_enum();
