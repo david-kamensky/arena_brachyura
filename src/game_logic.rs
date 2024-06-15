@@ -438,6 +438,7 @@ pub fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
 
 pub struct GameParameters {
     pub has_ceiling: bool,
+    pub darkening_length_scale: f32,
 }
 
 impl GameParameters {
@@ -445,6 +446,7 @@ impl GameParameters {
 
         // Default values for parameters:
         let mut has_ceiling = false;
+        let mut darkening_length_scale = -1.0; // Negative is full-bright.
 
         println!("Parsing configuration '{}'...", cfg_filename);
         let file_string: String = fs::read_to_string(cfg_filename).unwrap();
@@ -463,14 +465,16 @@ impl GameParameters {
             }
             match param {
                 "" => {}, // Happens in pure-whitespace lines; ignore.
-                "has_ceiling"
-                    => {has_ceiling = value.parse::<bool>().unwrap();},
+                "has_ceiling" => {has_ceiling = value.parse::<bool>().unwrap();},
+                "darkening_length_scale" => {darkening_length_scale = value.parse::<f32>().unwrap();},
                 _ => {println!("  Warning: Unknown parameter '{}'", param);}
             }
         }
         println!("  has_ceiling = {}", has_ceiling);
-        return GameParameters{has_ceiling: has_ceiling,};
-    }
+        println!("  darkening_length_scale = {}", darkening_length_scale);
+        return GameParameters{has_ceiling: has_ceiling,
+                              darkening_length_scale: darkening_length_scale};
+    } // line
 }
 
 pub struct TextureSet<'a> {
@@ -928,6 +932,9 @@ impl<'a> Game<'a> {
         }else{
             transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
         }
+
+        // Post-processing filter that adds a depth-darkening effect.  Must run last.
+        depth_darkening(draw_surf, z_buffer, self.parameters.darkening_length_scale);
     }
 }
 

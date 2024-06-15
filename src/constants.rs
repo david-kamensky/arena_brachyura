@@ -46,6 +46,7 @@ pub static DATA_ROOT: &str = "data/";
 pub static DEFAULT_TEXTURE_PATH: &str = "default_textures/";
 pub static PARAM_FILENAME: &str = "params.cfg";
 pub static INITIAL_DT: i32 = 10;
+pub static Z_EPS: f32 = 1e-6;
 
 pub static PI: f32 = std::f32::consts::PI;
 

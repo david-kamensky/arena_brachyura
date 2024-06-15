@@ -114,3 +114,24 @@ pub fn transfer_pixel_transparent(source: &Surface, dest: &Surface, sx: i32, sy:
     } // unsafe
     return false;
 }
+
+// Scaling the brightness of a pixel by a floating-point number; assumed to be in range [0,1] without checking.
+pub fn scale_pixel(surf: &Surface, x: i32, y: i32, scale: f32) {
+
+    let bpp = surf.pixel_format_enum().byte_size_per_pixel() as i32;
+    let pitch = surf.pitch() as i32;
+    let offset: i32 = bpp*x + pitch*y;
+    unsafe {
+        let pixels: *mut c_void = (*surf.raw()).pixels;
+        let pixels_offset: *mut c_void = pixels.wrapping_add(offset as usize);
+        let r = *(pixels_offset as *const u8);
+        let g = *((pixels_offset.wrapping_add(1 as usize)) as *const u8);
+        let b = *((pixels_offset.wrapping_add(2 as usize)) as *const u8);
+        let scaled_r = (scale*(r as f32)) as u8;
+        let scaled_g = (scale*(g as f32)) as u8;
+        let scaled_b = (scale*(b as f32)) as u8;
+        std::ptr::copy_nonoverlapping(&scaled_r, pixels_offset as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&scaled_g, pixels_offset.wrapping_add(1 as usize) as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&scaled_b, pixels_offset.wrapping_add(2 as usize) as *mut u8, 1);
+    } // unsafe
+}

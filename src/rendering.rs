@@ -252,3 +252,22 @@ pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,
                                  x_yaw[1]*cos_pitch - x_yaw[2]*sin_pitch,
                                  x_yaw[1]*sin_pitch + x_yaw[2]*cos_pitch);
 }
+
+// Darken `draw_surf` based on `z_buffer`, with brightness drop-off dictated by `length_scale`. Negative length scale
+// indicates full-bright lighting, and the function is a no-op.
+pub fn depth_darkening(draw_surf: &mut Surface, z_buffer: &DMatrix<f32>, length_scale: f32) {
+    if(length_scale < 0.0){return;}
+    for i in 0..H {
+        let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
+        for j in 0..W {
+            let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
+            let z = z_buffer[(i as usize, j as usize)];
+            let dist2 = z*z*(1.0 + tan_i*tan_i + tan_j*tan_j);
+            // Heuristic based on aesthetic considerations:
+            //let scale = f32::min(1.0, length_scale/f32::max(dist2.sqrt(), Z_EPS));
+            //let scale = (-dist2/length_scale/length_scale).exp();
+            let scale = (-dist2.sqrt()/length_scale).exp(); // TODO: Cheaper formula that looks good?
+            scale_pixel(draw_surf, j as i32, i as i32, scale);
+        } // j
+    } // i
+}
