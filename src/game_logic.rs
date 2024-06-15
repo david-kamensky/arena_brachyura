@@ -506,8 +506,7 @@ impl<'a> TextureSet<'a> {
             match try_load_texture {
                 Err(e) => {
                     println!("  Using default for '{}'", filename);
-                    let default_path = DATA_ROOT.to_owned()
-                        + DEFAULT_TEXTURE_PATH + filename;
+                    let default_path = data_filename(&(DEFAULT_TEXTURE_PATH.to_owned() + filename).to_string());
                     return load_image_with_format(default_path,
                                                   format).unwrap();
                 },
@@ -926,7 +925,10 @@ impl<'a> Game<'a> {
 }
 
 pub fn data_filename(name: &str) -> String {
-    return (DATA_ROOT.to_owned()+name).to_string();
+    return (std::env::current_exe().expect("System failed to locate executable.")
+            .parent().expect("System failed to fine executable directory.")
+            .to_str().expect("Could not convert executable directory path to string.").to_owned()
+            + "/" + DATA_ROOT + name).to_string();
 }
 
 pub struct CmdArgs {
