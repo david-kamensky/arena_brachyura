@@ -60,22 +60,21 @@ pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen: &mut Surfa
 }
 
 pub fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
-                           texture: &Surface,
-                           screen: &mut Surface, z_buffer: &mut DMatrix<f32>){
+                               texture: &Surface,
+                               screen: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
     let p0 = SVector::<f32,3>::new(x1, y1, 0.5*(WALL_H as f32));
     let p1 = SVector::<f32,3>::new(x2, y2, 0.5*(WALL_H as f32));
     let p2 = SVector::<f32,3>::new(x1, y1, -0.5*(WALL_H as f32));
     let pp0 = transform_for_player(&p0, &player);
     let pp1 = transform_for_player(&p1, &player);
     let pp2 = transform_for_player(&p2, &player);
-    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer,
-                         true, false);
+    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer, bright_mask, false, true, false);
 }
 
 pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
-                        x2: &SVector<f32,3>, texture: &Surface,
-                        screen: &Surface, z_buffer: &mut DMatrix<f32>,
-                        transparent: bool, tile: bool){
+                            x2: &SVector<f32,3>, texture: &Surface,
+                            screen: &Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>,
+                            full_bright: bool, transparent: bool, tile: bool){
     let v1 = x1 - x0;
     let v2 = x2 - x0;
     let x3 = x0 + v1 + v2;
@@ -175,14 +174,16 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
             }
             if(transfer_pixel_no_bounds(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
                 z_buffer[(H2_j as usize, W2_i as usize)] = z;
+                bright_mask[(H2_j as usize, W2_i as usize)] = if(full_bright){1}else{0};
             }
         } // j
     } // i
 }
 
 pub fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
-                             x: &SVector<f32,3>, width: f32, height: f32,
-                             player: &Player, z_buffer: &mut DMatrix<f32>){
+                                 x: &SVector<f32,3>, width: f32, height: f32,
+                                 player: &Player, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>,
+                                 full_bright: bool){
     let x_trans = transform_for_player(&x, player);
     // Define surface to always face player after transforming center point:
     let x0 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
@@ -191,13 +192,13 @@ pub fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
                                    x_trans[1]-0.5*height, x_trans[2]);
     let x2 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
                                    x_trans[1]+0.5*height, x_trans[2]);
-    render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, true, false);
+    render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, bright_mask, full_bright, true, false);
 }
 
 // This is for rendering 2D HUD elements and updating the z-buffer to skip
 // any 3D geometry behind them.
 pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
-                  z_buffer: &mut DMatrix<f32>){
+                      z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
     let w = rect.width() as f32;
     let h = rect.height() as f32;
     let s_w = source.width() as f32;
@@ -218,15 +219,17 @@ pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
                 // If the pixel is non-transparent, set the z-buffer to zero
                 // to block anything from rendering over the 2D sprite.
                 z_buffer[(j as usize,i as usize)] = 0.0;
+                // All 2D sprites are full-bright.
+                bright_mask[(j as usize,i as usize)] = 1;
             } // if
         } // i
     } // j
 }
 
 pub fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
-                            player: &Player, x_low: f32, x_high: f32,
-                            y_low: f32, y_high: f32,
-                            z_buffer: &mut DMatrix<f32>, ceiling: bool){
+                                player: &Player, x_low: f32, x_high: f32,
+                                y_low: f32, y_high: f32,
+                                z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>, ceiling: bool){
     let z = if(ceiling){0.5*(WALL_H as f32)}else{-0.5*(WALL_H as f32)};
     let x0 = SVector::<f32,3>::new(x_low, y_low, z);
     let x1 = SVector::<f32,3>::new(x_high, y_low, z);
@@ -234,7 +237,7 @@ pub fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
     let p0 = transform_for_player(&x0, &player);
     let p1 = transform_for_player(&x1, &player);
     let p2 = transform_for_player(&x2, &player);
-    render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, false, true);
+    render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, bright_mask, false, false, true);
 }
 
 pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
@@ -255,18 +258,21 @@ pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,
 
 // Darken `draw_surf` based on `z_buffer`, with brightness drop-off dictated by `length_scale`. Negative length scale
 // indicates full-bright lighting, and the function is a no-op.
-pub fn depth_darkening(draw_surf: &mut Surface, z_buffer: &DMatrix<f32>, length_scale: f32) {
+// FIXME: Use a more memory-efficient representation of the full-bright mask, e.g., indexing into a bit-vec. (Or, use for
+// other per-pixel flags and differentiate w/ bitwise OR?)
+pub fn depth_darkening(draw_surf: &mut Surface, z_buffer: &DMatrix<f32>, bright_mask: &DMatrix<u8>, length_scale: f32) {
     if(length_scale < 0.0){return;}
+    let l2 = length_scale*length_scale;
     for i in 0..H {
         let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
         for j in 0..W {
+            if(bright_mask[(i as usize, j as usize)] != 0){continue;}
             let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
             let z = z_buffer[(i as usize, j as usize)];
             let dist2 = z*z*(1.0 + tan_i*tan_i + tan_j*tan_j);
             // Heuristic based on aesthetic considerations:
-            //let scale = f32::min(1.0, length_scale/f32::max(dist2.sqrt(), Z_EPS));
-            //let scale = (-dist2/length_scale/length_scale).exp();
-            let scale = (-dist2.sqrt()/length_scale).exp(); // TODO: Cheaper formula that looks good?
+            //let scale = (-dist2.sqrt()/length_scale).exp();
+            let scale = 1.0/((dist2/l2) + 1.0);
             scale_pixel(draw_surf, j as i32, i as i32, scale);
         } // j
     } // i

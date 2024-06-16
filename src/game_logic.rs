@@ -188,10 +188,10 @@ impl<'a> Player<'a> {
         self.projectile.splash_time = 0;
     }
     pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
-                                     z_buffer: &mut DMatrix<f32>){
+                                     z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
         // Draw the score bar as part of the player HUD.
         let score_bar_rect = Rect::new(0,0,W, ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC) as u32);
-        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect, z_buffer);
+        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect, z_buffer, bright_mask);
         // Width of gun image on screen:
         let gun_screen_w = PL_GUN_SCREEN_FRAC*(W as f32);
         // Scale height proportionally based on input image:
@@ -204,18 +204,18 @@ impl<'a> Player<'a> {
             transform_and_draw_sprite(self.projectile.splash_sprite, dest,
                                       &self.projectile.x,
                                       2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
-                                      self, z_buffer);
+                                      self, z_buffer, bright_mask, true);
         }
         if(self.projectile.ready){
-            draw_sprite_2d(self.gun_ready_sprite, dest, &gun_rect, z_buffer);
+            draw_sprite_2d(self.gun_ready_sprite, dest, &gun_rect, z_buffer, bright_mask);
             return;
         }else{
-            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer);
+            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer, bright_mask);
         }
         transform_and_draw_sprite(self.projectile.sprite, dest,
                                   &self.projectile.x,
                                   2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
-                                  self, z_buffer);
+                                  self, z_buffer, bright_mask, true);
     }
     pub fn enforce_speed_limit(&self, a: &mut SVector::<f32,2>,
                                limit_type: SpeedLimitType){
@@ -326,18 +326,19 @@ impl<'a> Monster<'a> {
                 x_spawn: SVector::<f32,3>::new(0.0,0.0,0.0)}
     }
     pub fn render(self: &Monster<'a>, dest: &mut Surface,
-                  player: &Player, z_buffer: &mut DMatrix<f32>){
+                  player: &Player, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
         let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
-        transform_and_draw_sprite(if(self.dead_timer > 0){self.dead_sprite}
+        let dead = self.dead();
+        transform_and_draw_sprite(if(dead){self.dead_sprite}
                                   else{self.sprite},
                                   dest, &x_center,
                                   2.0*MONSTER_R, 2.0*MONSTER_R,
-                                  player, z_buffer);
+                                  player, z_buffer, bright_mask, dead);
         if(self.spawn_timer > 0){
             transform_and_draw_sprite(self.spawn_sprite,
                                       dest, &self.x_spawn,
                                       2.0*MONSTER_R, 2.0*MONSTER_R,
-                                      player, z_buffer);
+                                      player, z_buffer, bright_mask, true);
         }
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
@@ -577,9 +578,9 @@ impl<'a> Wall<'a> {
     } // new
 
     pub fn render(self: &Wall<'a>, player: &Player, dest: &mut Surface,
-                  z_buffer: &mut DMatrix<f32>){
+                  z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
         transform_and_draw_wall(player, self.x1, self.y1, self.x2, self.y2,
-                                self.texture, dest, z_buffer);
+                                self.texture, dest, z_buffer, bright_mask);
     }
 
     pub fn closest_point(self: &Wall<'a>, x: &SVector<f32,2>)
@@ -701,8 +702,8 @@ impl<'a> Level<'a> {
         } // i
     }
 
-    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, player: &Player){
-        for w in self.walls.iter() {w.render(player, dest, z_buffer);}
+    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>, player: &Player){
+        for w in self.walls.iter() {w.render(player, dest, z_buffer, bright_mask);}
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
         for w in self.walls.iter(){
@@ -831,7 +832,7 @@ impl<'a> Game<'a> {
         return GameState::Continue;
     }
 
-    pub fn draw_minimap(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
+    pub fn draw_minimap(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
         // TODO: Parameterize with constants.
         let minimap_w = 128 as i32;
         let minimap_dot_w = 6;
@@ -864,13 +865,14 @@ impl<'a> Game<'a> {
         draw_surf.fill_rect(player_rect, Color::RGB(0,255,0));
 
         // Add cover over minimap:
-        draw_sprite_2d(&self.player.minimap_cover, draw_surf, &minimap_rect, z_buffer);
+        draw_sprite_2d(&self.player.minimap_cover, draw_surf, &minimap_rect, z_buffer, bright_mask);
 
         // Fill in z-buffer with zeros, so this can be drawn first to speed up floor rendering; cover
         // image is mostly transparent, so this needs to be done manually.
         for i in minimap_x..(W as i32) {
             for j in minimap_y..(H as i32) {
                 z_buffer[(j as usize, i as usize)] = 0.0;
+                bright_mask[(j as usize, i as usize)] = 1;
             } // j
         } // i
     }
@@ -889,38 +891,38 @@ impl<'a> Game<'a> {
         draw_surf.fill_rect(score_rect, Color::RGB(score_red,score_green,0));
     }
 
-    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>){
-        // Reset z-buffer:
+    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+        // Reset z-buffer and full-bright mask:
         for i in 0..H{ for j in 0..W{
             z_buffer[(i as usize, j as usize)] = FAR_Z;
+            bright_mask[(i as usize, j as usize)] = 0;
         }}
 
         // Foreground HUD elements that fill in z-buffer with zeros; draw first to reduce cost:
-        self.draw_minimap(draw_surf, z_buffer);
-        self.player.render_gun_and_projectile(draw_surf, z_buffer);
+        self.draw_minimap(draw_surf, z_buffer, bright_mask);
+        self.player.render_gun_and_projectile(draw_surf, z_buffer, bright_mask);
         self.draw_score_bar(draw_surf);
 
         // Draw all sprites:
         for monster in &self.monsters {
-            monster.render(draw_surf, &self.player, z_buffer);
+            monster.render(draw_surf, &self.player, z_buffer, bright_mask);
         }
 
         // Render the level's walls:
-        self.level.draw_all_walls(draw_surf, z_buffer, &self.player);
+        self.level.draw_all_walls(draw_surf, z_buffer, bright_mask, &self.player);
 
         // Draw floor and sky last to skip as much as possible through
         // z-buffer populated by other things.
         transform_and_draw_floor(self.level.floor_texture, draw_surf, &self.player,
-                                 0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, false);
+                                 0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, bright_mask, false);
         if(self.parameters.has_ceiling){
             transform_and_draw_floor(self.level.sky_texture, draw_surf, &self.player,
-                                     0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, true);
+                                     0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, bright_mask, true);
         }else{
             transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
         }
-
         // Post-processing filter that adds a depth-darkening effect.  Must run last.
-        depth_darkening(draw_surf, z_buffer, self.parameters.darkening_length_scale);
+        depth_darkening(draw_surf, z_buffer, bright_mask, self.parameters.darkening_length_scale);
     }
 }
 

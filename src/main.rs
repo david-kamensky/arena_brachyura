@@ -75,7 +75,9 @@ fn main() -> Result<(), String> {
 
     let mut game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);
 
+    // TODO: Group this stuff into a rendering context `struct` with the drawing surface.
     let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
+    let mut bright_mask = DMatrix::<u8>::zeros(H as usize, W as usize);
 
     let timer = sdl_context.timer()?;
     let mut dt: i32 = INITIAL_DT;
@@ -118,7 +120,7 @@ fn main() -> Result<(), String> {
                     game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Continue => {},
         }
-        game.render(&mut draw_surf, &mut z_buffer);
+        game.render(&mut draw_surf, &mut z_buffer, &mut bright_mask);
 
         // NOTE: This is the only way I've found to get software-rendered images to the screen reliably in both fullscreen and windowed
         // modes, without tearing or flickering artifacts.
