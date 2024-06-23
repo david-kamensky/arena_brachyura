@@ -59,16 +59,15 @@ pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen: &mut Surfa
     } // j
 }
 
-pub fn transform_and_draw_wall(player: &Player, x1: f32, y1: f32, x2: f32, y2: f32,
-                               texture: &Surface,
-                               screen: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
-    let p0 = SVector::<f32,3>::new(x1, y1, 0.5*(WALL_H as f32));
-    let p1 = SVector::<f32,3>::new(x2, y2, 0.5*(WALL_H as f32));
-    let p2 = SVector::<f32,3>::new(x1, y1, -0.5*(WALL_H as f32));
+pub fn transform_and_draw_panel(player: &Player, panel: &VerticalPanel,
+                                screen: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+    let p0 = SVector::<f32,3>::new(panel.x0[0], panel.x0[1], panel.z_top);
+    let p1 = SVector::<f32,3>::new(panel.x1[0], panel.x1[1], panel.z_top);
+    let p2 = SVector::<f32,3>::new(panel.x0[0], panel.x0[1], panel.z_bottom);
     let pp0 = transform_for_player(&p0, &player);
     let pp1 = transform_for_player(&p1, &player);
     let pp2 = transform_for_player(&p2, &player);
-    render_parallelogram(&pp0, &pp1, &pp2, texture, screen, z_buffer, bright_mask, false, true, false);
+    render_parallelogram(&pp0, &pp1, &pp2, panel.texture, screen, z_buffer, bright_mask, false, true, false);
 }
 
 pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,

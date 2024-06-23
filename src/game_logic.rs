@@ -284,7 +284,7 @@ impl<'a> Player<'a> {
         }
     }
 
-    pub fn collide_with_wall(self: &mut Player<'a>, wall: &Wall){
+    pub fn collide_with_wall(self: &mut Player<'a>, wall: &VerticalPanel){
         let x = wall.closest_point(&(self.x));
         let orthog = self.x - x;
         let dist = orthog.norm();
@@ -439,6 +439,7 @@ pub fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
 
 pub struct GameParameters {
     pub has_ceiling: bool,
+    pub has_grass: bool,
     pub darkening_length_scale: f32,
 }
 
@@ -447,6 +448,7 @@ impl GameParameters {
 
         // Default values for parameters:
         let mut has_ceiling = false;
+        let mut has_grass = false;
         let mut darkening_length_scale = -1.0; // Negative is full-bright.
 
         println!("Parsing configuration '{}'...", cfg_filename);
@@ -467,13 +469,15 @@ impl GameParameters {
             match param {
                 "" => {}, // Happens in pure-whitespace lines; ignore.
                 "has_ceiling" => {has_ceiling = value.parse::<bool>().unwrap();},
+                "has_grass" => {has_grass = value.parse::<bool>().unwrap();},
                 "darkening_length_scale" => {darkening_length_scale = value.parse::<f32>().unwrap();},
                 _ => {println!("  Warning: Unknown parameter '{}'", param);}
             }
         }
         println!("  has_ceiling = {}", has_ceiling);
+        println!("  has_grass = {}", has_grass);
         println!("  darkening_length_scale = {}", darkening_length_scale);
-        return GameParameters{has_ceiling: has_ceiling,
+        return GameParameters{has_ceiling: has_ceiling, has_grass: has_grass,
                               darkening_length_scale: darkening_length_scale};
     } // line
 }
@@ -482,6 +486,7 @@ pub struct TextureSet<'a> {
     pub outer_wall_texture: Surface<'a>,
     pub inner_wall_texture: Surface<'a>,
     pub floor_texture: Surface<'a>,
+    pub grass_texture: Surface<'a>,
     pub sky_texture: Surface<'a>,
     pub monster_sprite: Surface<'a>,
     pub monster_dead_sprite: Surface<'a>,
@@ -522,6 +527,7 @@ impl<'a> TextureSet<'a> {
             outer_wall_texture: try_override("outer_wall_texture.png"),
             inner_wall_texture: try_override("inner_wall_texture.png"),
             floor_texture: try_override("floor.png"),
+            grass_texture: try_override("grass.png"),
             sky_texture: try_override("sky.png"),
             monster_sprite: try_override("monster.png"),
             monster_dead_sprite: try_override("monster_dead_sprite.png"),
@@ -553,78 +559,95 @@ pub enum WallType {
     ConstantY,
 }
 
-struct Wall<'a> {
-    pub x1: f32,
-    pub x2: f32,
-    pub y1: f32,
-    pub y2: f32,
-    pub wall_type: WallType,
+pub struct VerticalPanel<'a> {
+    pub x0: SVector<f32,2>,
+    pub x1: SVector<f32,2>,
+    pub z_bottom: f32,
+    pub z_top: f32,
     pub texture: &'a Surface<'a>,
 }
 
-impl<'a> Wall<'a> {
-    pub fn new(wall_type: WallType, start: f32, end: f32, constant: f32,
-               texture: &'a Surface<'a>) -> Wall<'a> {
+impl<'a> VerticalPanel<'a> {
+    pub fn new_wall(wall_type: WallType, start: f32, end: f32, constant: f32,
+                    texture: &'a Surface<'a>) -> VerticalPanel<'a> {
+        let z_bottom = -0.5*(WALL_H as f32);
+        let z_top = 0.5*(WALL_H as f32);
         match wall_type {
             WallType::ConstantX =>
-                Wall{x1: constant, x2: constant, y1: start, y2: end,
-                     wall_type: wall_type,
-                     texture: texture},
+                VerticalPanel{x0: SVector::<f32,2>::new(constant, start), x1: SVector::<f32,2>::new(constant, end),
+                              z_bottom: z_bottom, z_top: z_top, texture: texture},
             WallType::ConstantY =>
-                Wall{y1: constant, y2: constant, x1: start, x2: end,
-                     wall_type: wall_type,
-                     texture: texture},
+                VerticalPanel{x0: SVector::<f32,2>::new(start, constant), x1: SVector::<f32,2>::new(end, constant),
+                              z_bottom: z_bottom, z_top: z_top, texture: texture},
         } // match
-    } // new
+    } // new_wall
 
-    pub fn render(self: &Wall<'a>, player: &Player, dest: &mut Surface,
-                  z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
-        transform_and_draw_wall(player, self.x1, self.y1, self.x2, self.y2,
-                                self.texture, dest, z_buffer, bright_mask);
+    pub fn new_grass(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> VerticalPanel<'a> {
+        let v = 0.5*GRASS_H*SVector::<f32,2>::new(theta.cos(), theta.sin());
+        let z_floor = -0.5*(WALL_H as f32);
+        VerticalPanel{x0: x - v, x1: x + v, z_bottom: z_floor, z_top: z_floor + GRASS_H, texture: texture}
     }
 
-    pub fn closest_point(self: &Wall<'a>, x: &SVector<f32,2>)
-                         -> SVector<f32,2>{
-        let x0 = SVector::<f32,2>::new(self.x1, self.y1);
-        let x1 = SVector::<f32,2>::new(self.x2, self.y2);
-        let dx = x1 - x0;
+    pub fn render(&self, player: &Player, dest: &mut Surface,
+                  z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+        transform_and_draw_panel(player, self, dest, z_buffer, bright_mask);
+    }
+
+    pub fn closest_point(&self, x: &SVector<f32,2>) -> SVector<f32,2>{
+        let dx = self.x1 - self.x0;
         let dx2 = dx.dot(&dx);
-        let s = -dx.dot(&(x0 - x))/dx2;
+        let s = -dx.dot(&(self.x0 - x))/dx2;
         if(s < 0.0 || s > 1.0){
-            let d0 = (x - x0).norm();
-            let d1 = (x - x1).norm();
-            if(d0 < d1){x0}else{x1}
+            let d0 = (x - self.x0).norm();
+            let d1 = (x - self.x1).norm();
+            if(d0 < d1){self.x0}else{self.x1}
         }else{
-            s*dx + x0
+            s*dx + self.x0
         }
     }
-} // impl Wall
+} // impl VerticalPanel
+
+// TODO: Smarter way to get random float in (0,1)?
+pub fn rand_01(rng: &mut SmallRng) -> f32{
+    (rng.gen_range(0..1024) as f32)/1024.0
+}
 
 struct Level<'a> {
-    pub walls: Vec::<Wall<'a>>,
+    pub walls: Vec::<VerticalPanel<'a>>,
+    pub grass: Vec::<VerticalPanel<'a>>,
     pub spawns: Vec::<SVector<f32,2>>,
     pub inner_wall_texture: &'a Surface<'a>,
     pub outer_wall_texture: &'a Surface<'a>,
     pub floor_texture: &'a Surface<'a>,
+    pub grass_texture: &'a Surface<'a>,
     pub sky_texture: &'a Surface<'a>,
     pub has_ceiling: bool,
+    pub has_grass: bool,
 }
 
 impl<'a> Level<'a> {
     pub fn new(texture_set: &'a TextureSet<'a>,
                parameters: &'a GameParameters) -> Level<'a> {
-        Level{walls: Vec::<Wall>::new(),
+        Level{walls: Vec::<VerticalPanel>::new(),
+              grass: Vec::<VerticalPanel>::new(),
               spawns: Vec::<SVector<f32,2>>::new(),
               inner_wall_texture: &texture_set.inner_wall_texture,
               outer_wall_texture: &texture_set.outer_wall_texture,
               floor_texture: &texture_set.floor_texture,
+              grass_texture: &texture_set.grass_texture,
               sky_texture: &texture_set.sky_texture,
-              has_ceiling: parameters.has_ceiling}
+              has_ceiling: parameters.has_ceiling,
+              has_grass: parameters.has_grass}
     }
     pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
                     start: f32, end: f32,
                     constant: f32, texture: &'a Surface<'a>){
-        self.walls.push(Wall::new(wall_type, start, end, constant, texture));
+        self.walls.push(VerticalPanel::new_wall(wall_type, start, end, constant, texture));
+    }
+
+    pub fn add_grass_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
+        let theta = 2.0*PI*rand_01(rng);
+        self.grass.push(VerticalPanel::new_grass(x, theta, self.grass_texture));
     }
 
     pub fn add_pillar(self: &mut Level<'a>, x: SVector<f32,2>,
@@ -664,7 +687,7 @@ impl<'a> Level<'a> {
     }
 
     pub fn add_walls_randomly(self: &mut Level<'a>, rng: &mut SmallRng){
-        self.walls = Vec::<Wall>::new();
+        self.walls = Vec::<VerticalPanel>::new();
         self.spawns = Vec::<SVector<f32,2>>::new();
         let mut col: i32 = -1;
         let mut factor: f32 = 6.0;
@@ -700,10 +723,22 @@ impl<'a> Level<'a> {
             self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
             self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 4.0*(n_row as f32)*WHF, self.outer_wall_texture);
         } // i
+
+        if(self.has_grass){
+            for i in 0..(4*GRASS_PER_WALL*n_row){
+                for j in 0..(4*GRASS_PER_WALL*n_col){
+                    let x = (WHF/(GRASS_PER_WALL as f32))*SVector::<f32,2>::new((i as f32)+0.5, (j as f32)+0.5);
+                    self.add_grass_at(x, rng);
+                }
+            }
+        } // if grass
     }
 
     pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>, player: &Player){
         for w in self.walls.iter() {w.render(player, dest, z_buffer, bright_mask);}
+        if(self.has_grass){
+            for g in self.grass.iter() {g.render(player, dest, z_buffer, bright_mask);}
+        }
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
         for w in self.walls.iter(){
@@ -919,7 +954,11 @@ impl<'a> Game<'a> {
             transform_and_draw_floor(self.level.sky_texture, draw_surf, &self.player,
                                      0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, bright_mask, true);
         }else{
-            transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
+            // The sky is infinitely-far away, so it will just be rendered as black with depth-based
+            // darkening; thus it is consistent to just skip this in outdoor levels with darkening.
+            if(self.parameters.darkening_length_scale < 0.0){
+                transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
+            }
         }
         // Post-processing filter that adds a depth-darkening effect.  Must run last.
         depth_darkening(draw_surf, z_buffer, bright_mask, self.parameters.darkening_length_scale);
