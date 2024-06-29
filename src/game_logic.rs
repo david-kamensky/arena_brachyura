@@ -65,14 +65,15 @@ impl<'a> Projectile<'a> {
     }
     pub fn collide_with_level(&mut self, level: &Level){
         if(self.ready){return;}
-        // Check collision with floor, or flying out into sky.
-        if(self.x[2] < (-0.5*(WALL_H as f32) + PL_PROJ_R)){self.reset(); return;}
-        if(self.x[2] > (0.5*(WALL_H as f32) - PL_PROJ_R)){
-            if(level.has_ceiling){self.reset();}
+        // Check collision with floor and possibly ceiling:
+        if((self.x[2] < (-0.5*(WALL_H as f32) + PL_PROJ_R))
+           || (level.has_ceiling && (self.x[2] > (0.5*(WALL_H as f32) - PL_PROJ_R)))){
+            self.reset();
             return;
         }
         // Check for collisions with walls:
         for wall in &level.walls {
+            if((self.x[2] < wall.z_bottom - PL_PROJ_R) || (self.x[2] > wall.z_top + PL_PROJ_R)){continue;}
             let self_x_2d = SVector::<f32,2>::new(self.x[0], self.x[1]);
             let x = wall.closest_point(&self_x_2d);
             let orthog = self_x_2d - x;
@@ -219,6 +220,7 @@ impl<'a> Player<'a> {
     }
     pub fn enforce_speed_limit(&self, a: &mut SVector::<f32,2>,
                                limit_type: SpeedLimitType){
+        // Non-physics-based, tuned for subjective game-feel.
         match limit_type {
             SpeedLimitType::Strict => {
                 // Prevent acceleration from increasing speed:
@@ -252,6 +254,7 @@ impl<'a> Player<'a> {
         } // match
     }
     pub fn update_velocity_and_position(self: &mut Player<'a>, dt: i32){
+        let dt_f = dt as f32;
         let accel_scale = if(self.z == 0.0){1.0}else{PLAYER_AIR_CONTROL};
         let accel = accel_scale*PLAYER_ACCEL;
         let ay = ((self.u-self.d) as f32)*accel;
@@ -264,20 +267,22 @@ impl<'a> Player<'a> {
         self.enforce_speed_limit(&mut a, SpeedLimitType::StraferunSoft);
         //self.enforce_speed_limit(&mut a, SpeedLimitType::IsotropicSoft);
 
-        self.jump_if_desired();
 
-        // Apply acceleration:
-        self.v += (dt as f32)*a;
-        self.vz -= (dt as f32)*GRAV_ACCEL;
-        // Implicit exponential integrator for frictional damping:
+        // Integrate xy-plane physics with semi-implicit Euler (and implicit exponential
+        // method for frictional damping):
+        self.v += dt_f*a;
         if(self.z <= 0.0){
-            self.v *= (-(dt as f32)/MOVE_DAMP_TIMESCALE).exp();
+            self.v *= (-dt_f/MOVE_DAMP_TIMESCALE).exp();
         }
-        // Integrate position:
-        self.x += (dt as f32)*self.v;
-        self.z += (dt as f32)*self.vz;
+        self.x += dt_f*self.v;
 
-        // Correct for collision with floor:
+        // Integrate z-direction physics exactly for constant acceleration, to make
+        // jump trajectories independent of time step size:
+        self.jump_if_desired();
+        self.z += self.vz*dt_f - 0.5*GRAV_ACCEL*dt_f*dt_f;
+        self.vz -= dt_f*GRAV_ACCEL;
+
+        // Correct z-direction position/velocity for (inelastic) collision with floor:
         if(self.z < 0.0){
             self.z = 0.0;
             self.vz = 0.0;
@@ -440,6 +445,7 @@ pub fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
 pub struct GameParameters {
     pub has_ceiling: bool,
     pub has_grass: bool,
+    pub has_trees: bool,
     pub darkening_length_scale: f32,
 }
 
@@ -449,6 +455,7 @@ impl GameParameters {
         // Default values for parameters:
         let mut has_ceiling = false;
         let mut has_grass = false;
+        let mut has_trees = false;
         let mut darkening_length_scale = -1.0; // Negative is full-bright.
 
         println!("Parsing configuration '{}'...", cfg_filename);
@@ -470,14 +477,16 @@ impl GameParameters {
                 "" => {}, // Happens in pure-whitespace lines; ignore.
                 "has_ceiling" => {has_ceiling = value.parse::<bool>().unwrap();},
                 "has_grass" => {has_grass = value.parse::<bool>().unwrap();},
+                "has_trees" => {has_trees = value.parse::<bool>().unwrap();},
                 "darkening_length_scale" => {darkening_length_scale = value.parse::<f32>().unwrap();},
                 _ => {println!("  Warning: Unknown parameter '{}'", param);}
             }
         }
         println!("  has_ceiling = {}", has_ceiling);
         println!("  has_grass = {}", has_grass);
+        println!("  has_trees = {}", has_trees);
         println!("  darkening_length_scale = {}", darkening_length_scale);
-        return GameParameters{has_ceiling: has_ceiling, has_grass: has_grass,
+        return GameParameters{has_ceiling: has_ceiling, has_grass: has_grass, has_trees: has_trees,
                               darkening_length_scale: darkening_length_scale};
     } // line
 }
@@ -580,8 +589,15 @@ impl<'a> VerticalPanel<'a> {
                 VerticalPanel{x0: SVector::<f32,2>::new(start, constant), x1: SVector::<f32,2>::new(end, constant),
                               z_bottom: z_bottom, z_top: z_top, texture: texture},
         } // match
-    } // new_wall
-
+    }
+    pub fn new_tree(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> (VerticalPanel<'a>, VerticalPanel<'a>) {
+        let v_first = 0.5*TREE_W*SVector::<f32,2>::new(theta.cos(), theta.sin());
+        let v_second = SVector::<f32,2>::new(-v_first[1], v_first[0]);
+        let z_bottom = -0.5*(WALL_H as f32);
+        let z_top = z_bottom + TREE_H;
+        (VerticalPanel{x0: x - v_first, x1: x + v_first, z_bottom: z_bottom, z_top: z_top, texture: texture},
+         VerticalPanel{x0: x - v_second, x1: x + v_second, z_bottom: z_bottom, z_top: z_top, texture: texture})
+    }
     pub fn new_grass(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> VerticalPanel<'a> {
         let v = 0.5*GRASS_H*SVector::<f32,2>::new(theta.cos(), theta.sin());
         let z_floor = -0.5*(WALL_H as f32);
@@ -623,6 +639,7 @@ struct Level<'a> {
     pub sky_texture: &'a Surface<'a>,
     pub has_ceiling: bool,
     pub has_grass: bool,
+    pub has_trees: bool,
 }
 
 impl<'a> Level<'a> {
@@ -637,7 +654,8 @@ impl<'a> Level<'a> {
               grass_texture: &texture_set.grass_texture,
               sky_texture: &texture_set.sky_texture,
               has_ceiling: parameters.has_ceiling,
-              has_grass: parameters.has_grass}
+              has_grass: parameters.has_grass,
+              has_trees: parameters.has_trees}
     }
     pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
                     start: f32, end: f32,
@@ -650,8 +668,19 @@ impl<'a> Level<'a> {
         self.grass.push(VerticalPanel::new_grass(x, theta, self.grass_texture));
     }
 
-    pub fn add_pillar(self: &mut Level<'a>, x: SVector<f32,2>,
-                      rng: &mut SmallRng){
+    pub fn add_tree_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
+        let theta = 2.0*PI*rand_01(rng);
+        let new_panels = VerticalPanel::new_tree(x, theta, self.inner_wall_texture);
+        self.walls.push(new_panels.0);
+        self.walls.push(new_panels.1);
+    }
+    pub fn add_tree_pillar(self: &mut Level<'a>, x: SVector<f32,2>, rng: &mut SmallRng){
+        self.add_tree_at(x, rng);
+        let theta = 2.0*PI*rand_01(rng);
+        let spawn_pt = x + TREE_W*SVector::<f32,2>::new(theta.cos(), theta.sin());
+        self.spawns.push(spawn_pt);
+    }
+    pub fn add_wall_pillar(self: &mut Level<'a>, x: SVector<f32,2>, rng: &mut SmallRng){
         // Index of random corner to be moved to center:
         let move_index = 2*(rng.gen_range(0..4));
         let mut pts = Vec::<SVector<f32,2>>::new();
@@ -710,7 +739,11 @@ impl<'a> Level<'a> {
                        && (!((row==0) && (col==0)))){break;}
                 } // loop
                 layout[(row as usize, col as usize)] = 1;
-                self.add_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WHF, (4.0*(row as f32) + 1.0)*WHF), rng);
+                if(self.has_trees){
+                    self.add_tree_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 2.0)*WHF, (4.0*(row as f32) + 2.0)*WHF), rng)
+                }else{
+                    self.add_wall_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WHF, (4.0*(row as f32) + 1.0)*WHF), rng);
+                }
             } // pillar
         } // row
 
