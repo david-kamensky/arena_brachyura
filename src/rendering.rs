@@ -2,6 +2,8 @@ extern crate sdl2;
 
 use sdl2::surface::Surface;
 use sdl2::rect::Rect;
+use sdl2::video::WindowSurfaceRef;
+use sdl2::render::Canvas;
 
 use nalgebra::SMatrix;
 use nalgebra::DMatrix;
@@ -13,6 +15,24 @@ use std::cmp::min;
 use crate::constants::*;
 use crate::game_logic::*;
 use crate::pixel_ops::*;
+
+pub struct ScreenState<'a> {
+    pub drawing_surface: Surface<'a>,
+    pub z_buffer: DMatrix<f32>,
+    pub bright_mask: DMatrix<u8>,
+}
+
+impl<'a> ScreenState<'a> {
+    pub fn new(screen_surf: &WindowSurfaceRef) -> ScreenState<'a> {
+        ScreenState{
+            // NOTE: First three bytes of each pixel assumed to be RGB in low-level pixel operations; default for screen surface on only
+            // system tested, but may not be guaranteed in general.
+            drawing_surface: Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB888).unwrap(),
+            z_buffer: DMatrix::<f32>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
+            bright_mask: DMatrix::<u8>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
+        }
+    } // new
+}
 
 // NOTE: This interprets the pixel-space of the sky image as a spherical polar coordinate chart, so objects at higher
 // elevation angles become severely distorted.

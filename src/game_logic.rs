@@ -379,9 +379,12 @@ impl<'a> Monster<'a> {
         self.bob_phase += BOB_SPEED*(dt as f32);
         self.z = BOB_AMPLITUDE*(1.0 + self.bob_phase.sin());
 
-        // Set trial velocity based on player location:
+        // Set trial velocity based on player location. No real graph-based pathfinding, but
+        // sufficient for simple, open level layouts.
         for i in 0..2 {
             let dx_i = self.x[i] - target.x[i];
+            // "Overshoot" the player's coordinate a bit on each axis before changing direction,
+            // to add some weaving-like motions; sometimes gives illusion of actively dodging.
             if(dx_i.abs() > r_sum){
                 self.v[i] = -MONSTER_SPEED*(dx_i/dx_i.abs());
             }
@@ -959,7 +962,12 @@ impl<'a> Game<'a> {
         draw_surf.fill_rect(score_rect, Color::RGB(score_red,score_green,0));
     }
 
-    pub fn render(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+    pub fn render(&self, screen_state: &mut ScreenState){
+
+        let z_buffer = &mut screen_state.z_buffer;
+        let draw_surf = &mut screen_state.drawing_surface;
+        let bright_mask = &mut screen_state.bright_mask;
+
         // Reset z-buffer and full-bright mask:
         for i in 0..H{ for j in 0..W{
             z_buffer[(i as usize, j as usize)] = FAR_Z;

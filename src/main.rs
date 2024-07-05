@@ -29,6 +29,7 @@ mod game_logic;
 
 use crate::constants::*;
 use crate::game_logic::*;
+use crate::rendering::*;
 
 fn main() -> Result<(), String> {
 
@@ -51,15 +52,11 @@ fn main() -> Result<(), String> {
     let texture_creator = canvas.texture_creator();
     let mut event_pump = sdl_context.event_pump()?;
     let screen_surf = canvas.window_mut().surface(&event_pump)?;
-    // NOTE: `draw_surf` is where everything is rendered. It is then copied to the canvas all at once.  Rendering directly to the Window surface is not
-    // robust and leads to screen tearing and/or flickering.
-    // NOTE: First three bytes of each pixel assumed to be RGB in low-level pixel operations; default for screen surface on only
-    // system tested, but may not be guaranteed in general.
-    let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB888)?;
-    //let mut draw_surf = Surface::new(screen_surf.width(), screen_surf.height(), screen_surf.pixel_format_enum())?;
-    let draw_surf_rect = draw_surf.rect();
 
-    let format = draw_surf.pixel_format_enum();
+    let mut screen_state = ScreenState::new(&screen_surf);
+    let draw_surf_rect = screen_state.drawing_surface.rect();
+
+    let format = screen_state.drawing_surface.pixel_format_enum();
 
     let texture_set_list = parse_texture_list(data_filename("texture_sets"));
 
@@ -74,10 +71,6 @@ fn main() -> Result<(), String> {
     let mut rng = SmallRng::seed_from_u64(level_seed);
 
     let mut game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);
-
-    // TODO: Group this stuff into a rendering context `struct` with the drawing surface.
-    let mut z_buffer = DMatrix::<f32>::zeros(H as usize, W as usize);
-    let mut bright_mask = DMatrix::<u8>::zeros(H as usize, W as usize);
 
     let timer = sdl_context.timer()?;
     let mut dt: i32 = INITIAL_DT;
@@ -120,11 +113,11 @@ fn main() -> Result<(), String> {
                     game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Continue => {},
         }
-        game.render(&mut draw_surf, &mut z_buffer, &mut bright_mask);
+        game.render(&mut screen_state);
 
         // NOTE: This is the only way I've found to get software-rendered images to the screen reliably in both fullscreen and windowed
         // modes, without tearing or flickering artifacts.
-        let texture = Texture::from_surface(&draw_surf, &texture_creator).unwrap();
+        let texture = Texture::from_surface(&(screen_state.drawing_surface), &texture_creator).unwrap();
         canvas.copy(&texture, draw_surf_rect, draw_surf_rect);
         canvas.present();
 
