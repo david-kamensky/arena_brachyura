@@ -188,8 +188,12 @@ impl<'a> Player<'a> {
         self.projectile.flight_time = 0;
         self.projectile.splash_time = 0;
     }
-    pub fn render_gun_and_projectile(self: &Player<'a>, dest: &mut Surface,
-                                     z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+    pub fn render_gun_and_projectile(self: &Player<'a>, screen_state: &mut ScreenState){
+
+        let z_buffer = &mut screen_state.z_buffer;
+        let dest = &mut screen_state.drawing_surface;
+        let bright_mask = &mut screen_state.bright_mask;
+
         // Draw the score bar as part of the player HUD.
         let score_bar_rect = Rect::new(0,0,W, ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC) as u32);
         draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect, z_buffer, bright_mask);
@@ -330,8 +334,12 @@ impl<'a> Monster<'a> {
                 spawn_timer: 0,
                 x_spawn: SVector::<f32,3>::new(0.0,0.0,0.0)}
     }
-    pub fn render(self: &Monster<'a>, dest: &mut Surface,
-                  player: &Player, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+    pub fn render(self: &Monster<'a>, player: &Player, screen_state: &mut ScreenState){
+
+        let z_buffer = &mut screen_state.z_buffer;
+        let dest = &mut screen_state.drawing_surface;
+        let bright_mask = &mut screen_state.bright_mask;
+
         let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
         let dead = self.dead();
         transform_and_draw_sprite(if(dead){self.dead_sprite}
@@ -770,7 +778,12 @@ impl<'a> Level<'a> {
         } // if grass
     }
 
-    pub fn draw_all_walls(&self, dest: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>, player: &Player){
+    pub fn draw_all_walls(&self, player: &Player, screen_state: &mut ScreenState){
+
+        let z_buffer = &mut screen_state.z_buffer;
+        let dest = &mut screen_state.drawing_surface;
+        let bright_mask = &mut screen_state.bright_mask;
+
         for w in self.walls.iter() {w.render(player, dest, z_buffer, bright_mask);}
         if(self.has_grass){
             for g in self.grass.iter() {g.render(player, dest, z_buffer, bright_mask);}
@@ -903,7 +916,12 @@ impl<'a> Game<'a> {
         return GameState::Continue;
     }
 
-    pub fn draw_minimap(&self, draw_surf: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+    pub fn draw_minimap(&self, screen_state: &mut ScreenState){
+
+        let z_buffer = &mut screen_state.z_buffer;
+        let draw_surf = &mut screen_state.drawing_surface;
+        let bright_mask = &mut screen_state.bright_mask;
+
         // TODO: Parameterize with constants.
         let minimap_w = 128 as i32;
         let minimap_dot_w = 6;
@@ -964,45 +982,38 @@ impl<'a> Game<'a> {
 
     pub fn render(&self, screen_state: &mut ScreenState){
 
-        let z_buffer = &mut screen_state.z_buffer;
-        let draw_surf = &mut screen_state.drawing_surface;
-        let bright_mask = &mut screen_state.bright_mask;
-
-        // Reset z-buffer and full-bright mask:
-        for i in 0..H{ for j in 0..W{
-            z_buffer[(i as usize, j as usize)] = FAR_Z;
-            bright_mask[(i as usize, j as usize)] = 0;
-        }}
+        screen_state.reset();
 
         // Foreground HUD elements that fill in z-buffer with zeros; draw first to reduce cost:
-        self.draw_minimap(draw_surf, z_buffer, bright_mask);
-        self.player.render_gun_and_projectile(draw_surf, z_buffer, bright_mask);
-        self.draw_score_bar(draw_surf);
+        self.draw_minimap(screen_state);
+        self.player.render_gun_and_projectile(screen_state);
+        self.draw_score_bar(&mut screen_state.drawing_surface);
 
         // Draw all sprites:
         for monster in &self.monsters {
-            monster.render(draw_surf, &self.player, z_buffer, bright_mask);
+            monster.render(&self.player, screen_state);
         }
 
         // Render the level's walls:
-        self.level.draw_all_walls(draw_surf, z_buffer, bright_mask, &self.player);
+        self.level.draw_all_walls(&self.player, screen_state);
 
         // Draw floor and sky last to skip as much as possible through
         // z-buffer populated by other things.
-        transform_and_draw_floor(self.level.floor_texture, draw_surf, &self.player,
-                                 0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, bright_mask, false);
+        transform_and_draw_floor(self.level.floor_texture, &self.player,
+                                 0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, false, screen_state);
         if(self.parameters.has_ceiling){
-            transform_and_draw_floor(self.level.sky_texture, draw_surf, &self.player,
-                                     0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, z_buffer, bright_mask, true);
+            transform_and_draw_floor(self.level.sky_texture, &self.player,
+                                     0.0, FLOOR_TILE_W, 0.0, FLOOR_TILE_W, true, screen_state);
         }else{
             // The sky is infinitely-far away, so it will just be rendered as black with depth-based
             // darkening; thus it is consistent to just skip this in outdoor levels with darkening.
             if(self.parameters.darkening_length_scale < 0.0){
-                transform_and_draw_sky(&self.player, &self.level.sky_texture, draw_surf, z_buffer);
+                transform_and_draw_sky(&self.player, &self.level.sky_texture, screen_state);
             }
         }
+
         // Post-processing filter that adds a depth-darkening effect.  Must run last.
-        depth_darkening(draw_surf, z_buffer, bright_mask, self.parameters.darkening_length_scale);
+        depth_darkening(self.parameters.darkening_length_scale, screen_state);
     }
 }
 

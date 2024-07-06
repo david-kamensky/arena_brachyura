@@ -19,6 +19,8 @@ use crate::pixel_ops::*;
 pub struct ScreenState<'a> {
     pub drawing_surface: Surface<'a>,
     pub z_buffer: DMatrix<f32>,
+    // FIXME: Use a more memory-efficient representation of the full-bright mask, e.g., indexing into a bit-vec. (Or, use for
+    // other per-pixel flags and differentiate w/ bitwise OR?)
     pub bright_mask: DMatrix<u8>,
 }
 
@@ -32,11 +34,23 @@ impl<'a> ScreenState<'a> {
             bright_mask: DMatrix::<u8>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
         }
     } // new
+
+    pub fn reset(&mut self){
+        // Reset z-buffer and full-bright mask:
+        for i in 0..H{ for j in 0..W{
+            self.z_buffer[(i as usize, j as usize)] = FAR_Z;
+            self.bright_mask[(i as usize, j as usize)] = 0;
+        }}
+    } // reset
 }
 
 // NOTE: This interprets the pixel-space of the sky image as a spherical polar coordinate chart, so objects at higher
 // elevation angles become severely distorted.
-pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen: &mut Surface, z_buffer: &DMatrix<f32>){
+pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen_state: &mut ScreenState){
+
+    let z_buffer = &mut screen_state.z_buffer;
+    let screen = &mut screen_state.drawing_surface;
+
     let t_h = sky.height() as f32;
     let t_w = sky.width() as f32;
     let cos_pitch = player.pitch.cos();
@@ -245,10 +259,13 @@ pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
     } // j
 }
 
-pub fn transform_and_draw_floor(source: &Surface, dest: &mut Surface,
-                                player: &Player, x_low: f32, x_high: f32,
-                                y_low: f32, y_high: f32,
-                                z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>, ceiling: bool){
+pub fn transform_and_draw_floor(source: &Surface, player: &Player, x_low: f32, x_high: f32,
+                                y_low: f32, y_high: f32, ceiling: bool, screen_state: &mut ScreenState){
+
+    let z_buffer = &mut screen_state.z_buffer;
+    let dest = &mut screen_state.drawing_surface;
+    let bright_mask = &mut screen_state.bright_mask;
+
     let z = if(ceiling){0.5*(WALL_H as f32)}else{-0.5*(WALL_H as f32)};
     let x0 = SVector::<f32,3>::new(x_low, y_low, z);
     let x1 = SVector::<f32,3>::new(x_high, y_low, z);
@@ -277,9 +294,12 @@ pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,
 
 // Darken `draw_surf` based on `z_buffer`, with brightness drop-off dictated by `length_scale`. Negative length scale
 // indicates full-bright lighting, and the function is a no-op.
-// FIXME: Use a more memory-efficient representation of the full-bright mask, e.g., indexing into a bit-vec. (Or, use for
-// other per-pixel flags and differentiate w/ bitwise OR?)
-pub fn depth_darkening(draw_surf: &mut Surface, z_buffer: &DMatrix<f32>, bright_mask: &DMatrix<u8>, length_scale: f32) {
+pub fn depth_darkening(length_scale: f32, screen_state: &mut ScreenState) {
+
+    let z_buffer = &mut screen_state.z_buffer;
+    let draw_surf = &mut screen_state.drawing_surface;
+    let bright_mask = &mut screen_state.bright_mask;
+
     if(length_scale < 0.0){return;}
     let l2 = length_scale*length_scale;
     for i in 0..H {
