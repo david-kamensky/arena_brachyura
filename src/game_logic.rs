@@ -574,11 +574,6 @@ pub fn parse_texture_list(list_filename: String) -> Vec<String>{
     return list;
 }
 
-pub enum WallType {
-    ConstantX,
-    ConstantY,
-}
-
 pub struct VerticalPanel<'a> {
     pub x0: SVector<f32,2>,
     pub x1: SVector<f32,2>,
@@ -588,18 +583,10 @@ pub struct VerticalPanel<'a> {
 }
 
 impl<'a> VerticalPanel<'a> {
-    pub fn new_wall(wall_type: WallType, start: f32, end: f32, constant: f32,
-                    texture: &'a Surface<'a>) -> VerticalPanel<'a> {
+    pub fn new_wall(x0: SVector<f32,2>, x1: SVector<f32,2>, texture: &'a Surface<'a>) -> VerticalPanel<'a> {
         let z_bottom = -0.5*(WALL_H as f32);
         let z_top = 0.5*(WALL_H as f32);
-        match wall_type {
-            WallType::ConstantX =>
-                VerticalPanel{x0: SVector::<f32,2>::new(constant, start), x1: SVector::<f32,2>::new(constant, end),
-                              z_bottom: z_bottom, z_top: z_top, texture: texture},
-            WallType::ConstantY =>
-                VerticalPanel{x0: SVector::<f32,2>::new(start, constant), x1: SVector::<f32,2>::new(end, constant),
-                              z_bottom: z_bottom, z_top: z_top, texture: texture},
-        } // match
+        VerticalPanel{x0: x0, x1: x1, z_bottom: z_bottom, z_top: z_top, texture: texture}
     }
     pub fn new_tree(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> (VerticalPanel<'a>, VerticalPanel<'a>) {
         let v_first = 0.5*TREE_W*SVector::<f32,2>::new(theta.cos(), theta.sin());
@@ -614,12 +601,10 @@ impl<'a> VerticalPanel<'a> {
         let z_floor = -0.5*(WALL_H as f32);
         VerticalPanel{x0: x - v, x1: x + v, z_bottom: z_floor, z_top: z_floor + GRASS_H, texture: texture}
     }
-
     pub fn render(&self, player: &Player, dest: &mut Surface,
                   z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
         transform_and_draw_panel(player, self, dest, z_buffer, bright_mask);
     }
-
     pub fn closest_point(&self, x: &SVector<f32,2>) -> SVector<f32,2>{
         let dx = self.x1 - self.x0;
         let dx2 = dx.dot(&dx);
@@ -668,12 +653,6 @@ impl<'a> Level<'a> {
               has_grass: parameters.has_grass,
               has_trees: parameters.has_trees}
     }
-    pub fn add_wall(self: &mut Level<'a>, wall_type: WallType,
-                    start: f32, end: f32,
-                    constant: f32, texture: &'a Surface<'a>){
-        self.walls.push(VerticalPanel::new_wall(wall_type, start, end, constant, texture));
-    }
-
     pub fn add_grass_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
         let theta = 2.0*PI*rand_01(rng);
         self.grass.push(VerticalPanel::new_grass(x, theta, self.grass_texture));
@@ -716,13 +695,7 @@ impl<'a> Level<'a> {
             pts[8] = SVector::<f32,2>::new(x[0]+WHF, x[1]+WHF);
         }
         for i in 1..9 {
-            if(pts[i][0] == pts[i-1][0]){
-                self.add_wall(WallType::ConstantX, pts[i-1][1], pts[i][1],
-                              pts[i][0], self.inner_wall_texture);
-            }else{
-                self.add_wall(WallType::ConstantY, pts[i-1][0], pts[i][0],
-                              pts[i][1], self.inner_wall_texture);
-            } // if/else
+            self.walls.push(VerticalPanel::new_wall(pts[i-1], pts[i], self.inner_wall_texture));
         } // i
     }
 
@@ -759,13 +732,21 @@ impl<'a> Level<'a> {
         } // row
 
         // Exterior walls:
+        let x_min = 0.0;
+        let x_max = 4.0*(n_col as f32)*WHF;
+        let y_min = 0.0;
+        let y_max = 4.0*(n_row as f32)*WHF;
         for i in 0..(4*n_row) {
-            self.add_wall(WallType::ConstantX, (i as f32)*WHF, ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
-            self.add_wall(WallType::ConstantX, (i as f32)*WHF, ((i+1) as f32)*WHF, 4.0*(n_col as f32)*WHF, self.outer_wall_texture);
+            let y_start = (i as f32)*WHF;
+            let y_end = ((i+1) as f32)*WHF;
+            self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_min, y_start), SVector::<f32,2>::new(x_min, y_end), self.outer_wall_texture));
+            self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_max, y_start), SVector::<f32,2>::new(x_max, y_end), self.outer_wall_texture));
         } // i
         for i in 0..(4*n_col) {
-            self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 0.0, self.outer_wall_texture);
-            self.add_wall(WallType::ConstantY, (i as f32)*WHF, ((i+1) as f32)*WHF, 4.0*(n_row as f32)*WHF, self.outer_wall_texture);
+            let x_start = (i as f32)*WHF;
+            let x_end = ((i+1) as f32)*WHF;
+            self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_start, y_min), SVector::<f32,2>::new(x_end, y_min), self.outer_wall_texture));
+            self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_start, y_max), SVector::<f32,2>::new(x_end, y_max), self.outer_wall_texture));
         } // i
 
         if(self.has_grass){
