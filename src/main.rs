@@ -75,13 +75,14 @@ fn main() -> Result<(), String> {
     let timer = sdl_context.timer()?;
     let mut dt: i32 = INITIAL_DT;
 
-    let menu = Menu::new(GameState::Starting);
+    let menu = Menu::new(GameState::Starting, 0);
     if(menu.wait_loop(&mut event_pump, &mut canvas)){
         sdl_context.sdldrop();
         return Ok(());
     }
 
     // Main game loop:
+    let mut num_consecutive_wins: u32 = 0;
     loop {
         let mut t_start: i32 = timer.ticks() as i32;
         let game_state = game.update_state(dt, &mut event_pump, &mut rng);
@@ -89,7 +90,8 @@ fn main() -> Result<(), String> {
             GameState::Starting => {},
             GameState::Quit => break,
             GameState::Win
-                => {let menu = Menu::new(game_state);
+                => {num_consecutive_wins += 1;
+                    let menu = Menu::new(game_state, num_consecutive_wins);
                     if(menu.wait_loop(&mut event_pump, &mut canvas)){break;}
                     // Restart with a new random seed after winning:
                     level_seed += 1;
@@ -104,8 +106,9 @@ fn main() -> Result<(), String> {
                     rng = SmallRng::seed_from_u64(level_seed);
                     game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Lose
-                => {let menu = Menu::new(game_state);
+                => {let menu = Menu::new(game_state, num_consecutive_wins);
                     if(menu.wait_loop(&mut event_pump, &mut canvas)){break;}
+                    num_consecutive_wins = 0;
                     // Retry with the same random seed after losing:
                     t_start = timer.ticks() as i32;
                     dt = INITIAL_DT;

@@ -801,18 +801,26 @@ pub enum MenuChoice {
 
 pub struct Menu<'a> {
     pub state: GameState,
-    pub image: Surface<'a>,
+    pub background: Surface<'a>,
+    pub num_consecutive_wins: u32,
+    pub digits: Vec<Surface<'a>>,
 }
 
 impl<'a> Menu<'a> {
-    pub fn new(state: GameState,) -> Menu<'a> {
+    pub fn new(state: GameState, num_consecutive_wins: u32) -> Menu<'a> {
         let mut filename: String = match state {
             GameState::Starting => data_filename("/menu_screens/start_screen.png"),
             GameState::Win => data_filename("/menu_screens/win_screen.png"),
             GameState::Lose => data_filename("/menu_screens/lose_screen.png"),
             _ => "".to_string(), // NOTE: Should be unreachable; `Menu` only created for above states.
         };
-        Menu{state: state, image: <Surface as LoadSurface>::from_file(filename).unwrap()}
+        let mut menu = Menu{state: state, background: <Surface as LoadSurface>::from_file(filename).unwrap(),
+                            num_consecutive_wins: num_consecutive_wins, digits: Vec::<Surface<'a>>::new()};
+        for i in 0..10 {
+            let digit_fname = data_filename(&("/menu_screens/".to_owned()+&(i.to_string())+".png"));
+            menu.digits.push(<Surface as LoadSurface>::from_file(digit_fname).unwrap());
+        }
+        return menu;
     }
     // Press escape to quit, space to continue.
     pub fn process_input(&self, event_pump: &mut EventPump) -> MenuChoice {
@@ -831,8 +839,39 @@ impl<'a> Menu<'a> {
     // Busy-waiting until quit/continue choice is made.
     pub fn wait_loop(&self, event_pump: &mut EventPump, canvas: &mut Canvas<Window>) -> bool {
         let texture_creator = canvas.texture_creator();
-        let texture = Texture::from_surface(&self.image, &texture_creator).unwrap();
-        canvas.copy(&texture, None, None);
+        let background = Texture::from_surface(&self.background, &texture_creator).unwrap();
+        let mut digit_textures = Vec::<Texture>::new();
+        for i in 0..10 {
+            digit_textures.push(Texture::from_surface(&(self.digits[i]), &texture_creator).unwrap());
+        }
+        canvas.copy(&background, None, None);
+        match self.state {
+            // For winning or losing screens, display the number of consecutive wins in the current streak.
+            GameState::Win | GameState::Lose => {
+                let mut temp = self.num_consecutive_wins;
+                let mut digits = Vec::<usize>::new();
+                if(temp == 0){
+                    digits.push(0);
+                }else{
+                    while(temp != 0){
+                        digits.push((temp % 10) as usize);
+                        temp = temp / 10;
+                    }
+                    digits.reverse();
+                }
+                let digit_w = 64 as u32;
+                let digit_h = 80 as u32;
+                let num_digits = digits.len();
+                let start_x = ((W2 as f32) - 0.5*(num_digits as f32)*(digit_w as f32)) as i32;
+                let y = (H2 as i32) - (digit_h as i32)/2;
+                for i in 0..num_digits {
+                    let x = start_x + (i as i32)*(digit_w as i32);
+                    let rect = Rect::new(x, y, digit_w, digit_h);
+                    canvas.copy(&(digit_textures[digits[i as usize]]), None, rect);
+                }
+            },
+            _ => {}, // No need to show zero score on starting screen.
+        }
         canvas.present();
         loop {
             match self.process_input(event_pump) {
