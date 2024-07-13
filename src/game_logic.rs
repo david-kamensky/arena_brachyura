@@ -632,7 +632,8 @@ impl<'a> Level<'a> {
               has_grass: parameters.has_grass,
               has_trees: parameters.has_trees,
               bounds: SMatrix::<f32,2,2>::zeros(),
-              wall_collision_structure: CollisionStructure::new((WALL_H as f32), SMatrix::<f32,2,2>::zeros()),}
+              // NOTE: Placeholder to be replaced later.
+              wall_collision_structure: CollisionStructure::new(1.0, SMatrix::<f32,2,2>::zeros()),}
     }
     pub fn add_grass_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
         let theta = 2.0*PI*rand_01(rng);
@@ -745,8 +746,9 @@ impl<'a> Level<'a> {
             }
         } // if grass
 
-        // Populate wall collision structure once here:
-        self.wall_collision_structure = CollisionStructure::new(WHF, self.bounds);
+        // Populate wall collision structure once after adding all walls.
+        let collision_r = WHF + f32::max(PLAYER_R, f32::max(PL_PROJ_R, MONSTER_R));
+        self.wall_collision_structure = CollisionStructure::new(collision_r, self.bounds);
         for i in 0..(self.walls.len()) {
             let x = 0.5*(self.walls[i].x0 + self.walls[i].x1);
             self.wall_collision_structure.add_point(&x, i);
@@ -883,25 +885,59 @@ pub struct CollisionStructure {
     pub collision_range: f32,
     pub bounds: SMatrix<f32,2,2>, // rows = directions, cols = lower/upper limits in directions
 
-    // FIXME: Placeholder pooling all indices in one bin to prototype interface.
-    indices: Vec<usize>,
+    // Collision structure has `n[0]*n[1]` bins of size at least `2.0*collision_range` in
+    // each direction. These are flattened into a `Vec` of `Vec`s of indices of points whose
+    // bounding boxes of size `2.0*collision_range` overlap that bin.
+    n: SVector<usize,2>,
+    bin_size: SVector<f32,2>,
+    index_bins: Vec<Vec<usize>>,
+    // Keep track of occupied bins for efficient reset with sparse occupancy.
+    occupied_bins: Vec<usize>,
 }
 
 impl CollisionStructure {
     pub fn new(collision_range: f32, bounds: SMatrix<f32,2,2>) -> CollisionStructure {
-        // TODO: Initialize real acceleration structure from args.
-        CollisionStructure{collision_range: collision_range, bounds: bounds, indices: Vec::<usize>::new()}
+        let mut n = SVector::<usize,2>::new(0,0);
+        // Require at least one bin in each direction, even if `bounds` is smaller than collision range.
+        for i in 0..2 {n[i] = usize::max(1, ((bounds[(i,1)] - bounds[(i,0)])/(2.0*collision_range)) as usize);}
+        let mut bin_size = SVector::<f32,2>::zeros();
+        for i in 0..2 {bin_size[i] = (bounds[(i,1)] - bounds[(i,0)])/(n[i] as f32);}
+        let mut index_bins = Vec::<Vec<usize>>::new();
+        for i in 0..(n[0]*n[1]) {index_bins.push(Vec::<usize>::new());}
+        CollisionStructure{collision_range: collision_range, bounds: bounds, n: n, bin_size: bin_size,
+                           index_bins: index_bins, occupied_bins: Vec::<usize>::new(),}
+    }
+    fn ij_to_I(&self, i: usize, j: usize) -> usize {
+        return j*self.n[0] + i;
+    }
+    fn ij(&self, x: &SVector<f32,2>) -> SVector<usize,2> {
+        let mut r = SVector::<usize,2>::zeros();
+        // Things that fall outside the bounds get placed in the nearest edge bins.
+        for i in 0..2 {r[i] = usize::min(self.n[i]-1, (f32::max(x[i]-self.bounds[(i,0)], 0.0)/self.bin_size[i]) as usize);}
+        return r;
     }
     pub fn reset(&mut self){
-        self.indices = Vec::<usize>::new();
+        for i in &(self.occupied_bins) {self.index_bins[*i].clear();}
+        self.occupied_bins.clear();
     }
     pub fn add_point(&mut self, position: &SVector<f32,2>, index: usize){
-        // TODO: Insert into real acceleration structure based on `position`.
-        self.indices.push(index);
+        // Add `index` to all bins that overlap a bounding box of +/- `collision_range` around `position`.
+        let rr = SVector::<f32,2>::new(self.collision_range, self.collision_range);
+        let x_min = position - rr;
+        let x_max = position + rr;
+        let ij_min = self.ij(&x_min);
+        let ij_max = self.ij(&x_max);
+        for i in ij_min[0]..(ij_max[0]+1){
+            for j in ij_min[1]..(ij_max[1]+1){
+                let bin_index = self.ij_to_I(i,j);
+                if(self.index_bins[bin_index].len() == 0){self.occupied_bins.push(bin_index);}
+                self.index_bins[bin_index].push(index);
+            } // j
+        } // i
     }
     pub fn indices_near(&self, position: &SVector<f32,2>) -> &Vec<usize> {
-        // TODO: Use acceleration structure to restrict iteration based on `position`.
-        return &(self.indices);
+        let ij = self.ij(position);
+        return &(self.index_bins[self.ij_to_I(ij[0], ij[1])]);
     }
 }
 
@@ -920,7 +956,8 @@ impl<'a> Game<'a> {
                rng: &mut SmallRng) -> Game<'a>{
         let mut level = Level::<'a>::new(texture_set, parameters);
         level.add_walls_randomly(rng);
-        let mut monster_collision_structure = CollisionStructure::new(MONSTER_R, level.bounds);
+        let collision_r = MONSTER_R + f32::max(PL_PROJ_R, PLAYER_R);
+        let mut monster_collision_structure = CollisionStructure::new(collision_r, level.bounds);
         let mut game
             = Game{parameters: parameters, cmd_args: cmd_args,
                    level: level,
