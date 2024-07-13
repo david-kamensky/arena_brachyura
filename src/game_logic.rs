@@ -16,6 +16,7 @@ use sdl2::video::Window;
 
 use nalgebra::DMatrix;
 use nalgebra::SVector;
+use nalgebra::SMatrix;
 
 use rand::Rng;
 use rand::rngs::ThreadRng;
@@ -72,7 +73,9 @@ impl<'a> Projectile<'a> {
             return;
         }
         // Check for collisions with walls:
-        for wall in &level.walls {
+        let proj_x2d = SVector::<f32,2>::new(self.x[0], self.x[1]);
+        for i in level.wall_collision_structure.indices_near(&proj_x2d) {
+            let wall = &(level.walls[*i]);
             if((self.x[2] < wall.z_bottom - PL_PROJ_R) || (self.x[2] > wall.z_top + PL_PROJ_R)){continue;}
             let self_x_2d = SVector::<f32,2>::new(self.x[0], self.x[1]);
             let x = wall.closest_point(&self_x_2d);
@@ -82,7 +85,7 @@ impl<'a> Projectile<'a> {
                 self.reset();
                 return;
             }
-        } // wall
+        } // i
     }
 }
 
@@ -399,12 +402,12 @@ impl<'a> Monster<'a> {
         } // i
         self.x += (dt as f32)*self.v;
 
-        for wall in &level.walls {
-            let x = wall.closest_point(&(self.x));
+        for i in level.wall_collision_structure.indices_near(&(self.x)){
+            let x = level.walls[*i].closest_point(&(self.x));
             let orthog = self.x - x;
             let dist = orthog.norm();
             if(dist < MONSTER_R){self.x = x + (MONSTER_R/dist)*orthog;}
-        } // wall
+        } // i
     }
 }
 
@@ -425,32 +428,6 @@ pub fn collide_monster_pair(monsters: &mut Vec<Monster>, i: usize, j: usize){
     let x_j_out = x_mid - MONSTER_R*dx_hat;
     monsters[i].x += MONSTER_COLLISION_DAMP*(x_i_out - x_i);
     monsters[j].x += MONSTER_COLLISION_DAMP*(x_j_out - x_j);
-}
-
-// Brute-force $O(n^2)$ collision detection between monsters:
-pub fn collide_monsters_with_each_other(monsters: &mut Vec<Monster>){
-    for iteration in 0..MONSTER_COLLISION_ITERS {
-        for i in 0..monsters.len(){
-            for j in (i+1)..monsters.len(){
-                collide_monster_pair(monsters, i, j);
-            } // j
-        } // i
-    } // iteration
-}
-
-pub fn collide_monsters_with_player_projectile(monsters: &mut Vec<Monster>,
-                                           player: &mut Player){
-    if(player.projectile.ready){return;}
-    for monster in monsters {
-        if(monster.dead()){continue;}
-        let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1],
-                                              monster.z);
-        if((monster_x - player.projectile.x).norm() < MONSTER_R){
-            player.projectile.reset();
-            player.score += SCORE_CHANGE;
-            monster.die();
-        }
-    } // monster
 }
 
 pub struct GameParameters {
@@ -636,6 +613,8 @@ struct Level<'a> {
     pub has_ceiling: bool,
     pub has_grass: bool,
     pub has_trees: bool,
+    pub bounds: SMatrix<f32,2,2>,
+    pub wall_collision_structure: CollisionStructure,
 }
 
 impl<'a> Level<'a> {
@@ -651,7 +630,9 @@ impl<'a> Level<'a> {
               sky_texture: &texture_set.sky_texture,
               has_ceiling: parameters.has_ceiling,
               has_grass: parameters.has_grass,
-              has_trees: parameters.has_trees}
+              has_trees: parameters.has_trees,
+              bounds: SMatrix::<f32,2,2>::zeros(),
+              wall_collision_structure: CollisionStructure::new((WALL_H as f32), SMatrix::<f32,2,2>::zeros()),}
     }
     pub fn add_grass_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
         let theta = 2.0*PI*rand_01(rng);
@@ -749,6 +730,12 @@ impl<'a> Level<'a> {
             self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_start, y_max), SVector::<f32,2>::new(x_end, y_max), self.outer_wall_texture));
         } // i
 
+        // Set level bounds:
+        self.bounds[(0,0)] = 0.0;
+        self.bounds[(0,1)] = WHF*(n_col as f32);
+        self.bounds[(1,0)] = 0.0;
+        self.bounds[(1,1)] = WHF*(n_row as f32);
+
         if(self.has_grass){
             for i in 0..(4*GRASS_PER_WALL*n_row){
                 for j in 0..(4*GRASS_PER_WALL*n_col){
@@ -757,6 +744,13 @@ impl<'a> Level<'a> {
                 }
             }
         } // if grass
+
+        // Populate wall collision structure once here:
+        self.wall_collision_structure = CollisionStructure::new(WHF, self.bounds);
+        for i in 0..(self.walls.len()) {
+            let x = 0.5*(self.walls[i].x0 + self.walls[i].x1);
+            self.wall_collision_structure.add_point(&x, i);
+        } // wall
     }
 
     pub fn draw_all_walls(&self, player: &Player, screen_state: &mut ScreenState){
@@ -771,9 +765,9 @@ impl<'a> Level<'a> {
         }
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
-        for w in self.walls.iter(){
-            player.collide_with_wall(w);
-        }
+        for i in self.wall_collision_structure.indices_near(&(player.x)) {
+            player.collide_with_wall(&(self.walls[*i]));
+        } // i
     }
 }
 
@@ -885,8 +879,35 @@ impl<'a> Menu<'a> {
     }
 }
 
+pub struct CollisionStructure {
+    pub collision_range: f32,
+    pub bounds: SMatrix<f32,2,2>, // rows = directions, cols = lower/upper limits in directions
+
+    // FIXME: Placeholder pooling all indices in one bin to prototype interface.
+    indices: Vec<usize>,
+}
+
+impl CollisionStructure {
+    pub fn new(collision_range: f32, bounds: SMatrix<f32,2,2>) -> CollisionStructure {
+        // TODO: Initialize real acceleration structure from args.
+        CollisionStructure{collision_range: collision_range, bounds: bounds, indices: Vec::<usize>::new()}
+    }
+    pub fn reset(&mut self){
+        self.indices = Vec::<usize>::new();
+    }
+    pub fn add_point(&mut self, position: &SVector<f32,2>, index: usize){
+        // TODO: Insert into real acceleration structure based on `position`.
+        self.indices.push(index);
+    }
+    pub fn indices_near(&self, position: &SVector<f32,2>) -> &Vec<usize> {
+        // TODO: Use acceleration structure to restrict iteration based on `position`.
+        return &(self.indices);
+    }
+}
+
 pub struct Game<'a> {
     pub monsters: Vec<Monster<'a>>,
+    pub monster_collision_structure: CollisionStructure,
     pub player: Player<'a>,
     pub level: Level<'a>,
     pub parameters: &'a GameParameters,
@@ -897,19 +918,58 @@ impl<'a> Game<'a> {
     pub fn new(parameters: &'a GameParameters, cmd_args: &'a CmdArgs,
                texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
-        let mut new_game
+        let mut level = Level::<'a>::new(texture_set, parameters);
+        level.add_walls_randomly(rng);
+        let mut monster_collision_structure = CollisionStructure::new(MONSTER_R, level.bounds);
+        let mut game
             = Game{parameters: parameters, cmd_args: cmd_args,
-                   level: Level::<'a>::new(texture_set, parameters),
+                   level: level,
                    player: Player::<'a>::new(texture_set),
-                   monsters: Vec::<Monster<'a>>::new()};
-        new_game.level.add_walls_randomly(rng);
+                   monsters: Vec::<Monster<'a>>::new(),
+                   monster_collision_structure: monster_collision_structure};
         if(!(cmd_args.no_monsters)){
-            for spawn in &new_game.level.spawns {
-                new_game.monsters.push(Monster::new(texture_set, *spawn, rng));
+            let mut i: usize = 0;
+            for spawn in &game.level.spawns {
+                game.monsters.push(Monster::new(texture_set, *spawn, rng));
+
+                i += 1;
             } // i
         }
-        new_game.player.x = PLAYER_START;
-        return new_game;
+        game.player.x = PLAYER_START;
+        return game;
+    }
+
+    pub fn update_collision_structures(&mut self){
+        self.monster_collision_structure.reset();
+        for i in 0..(self.monsters.len()) {
+            self.monster_collision_structure.add_point(&(self.monsters[i].x), i);
+        }
+    }
+
+    pub fn collide_monsters_with_each_other(&mut self){
+        for iteration in 0..MONSTER_COLLISION_ITERS {
+            for i in 0..self.monsters.len(){
+                for j in self.monster_collision_structure.indices_near(&(self.monsters[i].x)) {
+                    if(i < *j){collide_monster_pair(&mut (self.monsters), i, *j);}
+                } // j
+            } // i
+        } // iteration
+    }
+
+    pub fn collide_monsters_with_player_projectile(&mut self){
+        if(self.player.projectile.ready){return;}
+        let proj_x = self.player.projectile.x;
+        let proj_x2d = SVector::<f32,2>::new(proj_x[0], proj_x[1]);
+        for i in self.monster_collision_structure.indices_near(&proj_x2d) {
+            let monster = &mut (self.monsters[*i]);
+            if(monster.dead()){continue;}
+            let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1], monster.z);
+            if((monster_x - proj_x).norm() < MONSTER_R){
+                self.player.projectile.reset();
+                self.player.score += SCORE_CHANGE;
+                monster.die();
+            }
+        } // i
     }
 
     pub fn update_state(&mut self, dt: i32, event_pump: &mut EventPump, rng: &mut SmallRng) -> GameState {
@@ -919,15 +979,19 @@ impl<'a> Game<'a> {
         if(self.player.score >= 1.0){return GameState::Win;}
         if(self.player.score <= 0.0){return GameState::Lose;}
 
+        // NOTE: Some collision operations update positions of entities, but the collision structure only detects collisions
+        // between things that are nearby at the beginning of the step, because it is only updated here.  This is sufficient
+        // assuming that adjustments to positions within one step are small relative to the range of collision detection.
+        self.update_collision_structures();
+
         // Otherwise, update the player and monster states, and continue.
         self.player.update_velocity_and_position(dt);
         self.level.collide_player_with_walls(&mut self.player);
         for mut monster in &mut self.monsters {
             monster.think_and_move(&mut self.player, &self.level, dt, rng);
         }
-        collide_monsters_with_each_other(&mut self.monsters);
-        collide_monsters_with_player_projectile(&mut self.monsters,
-                                                &mut self.player);
+        self.collide_monsters_with_each_other();
+        self.collide_monsters_with_player_projectile();
         self.player.projectile.advance(dt);
         self.player.projectile.collide_with_level(&self.level);
         if(!(self.cmd_args.no_score_decay)){
