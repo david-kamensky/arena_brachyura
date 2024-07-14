@@ -733,9 +733,9 @@ impl<'a> Level<'a> {
 
         // Set level bounds:
         self.bounds[(0,0)] = 0.0;
-        self.bounds[(0,1)] = WHF*(n_col as f32);
+        self.bounds[(0,1)] = 4.0*WHF*(n_col as f32);
         self.bounds[(1,0)] = 0.0;
-        self.bounds[(1,1)] = WHF*(n_row as f32);
+        self.bounds[(1,1)] = 4.0*WHF*(n_row as f32);
 
         if(self.has_grass){
             for i in 0..(4*GRASS_PER_WALL*n_row){
@@ -885,7 +885,7 @@ pub struct CollisionStructure {
     pub collision_range: f32,
     pub bounds: SMatrix<f32,2,2>, // rows = directions, cols = lower/upper limits in directions
 
-    // Collision structure has `n[0]*n[1]` bins of size at least `2.0*collision_range` in
+    // Collision structure has `n[0]*n[1]` bins of size at least `collision_range` in
     // each direction. These are flattened into a `Vec` of `Vec`s of indices of points whose
     // bounding boxes of size `2.0*collision_range` overlap that bin.
     n: SVector<usize,2>,
@@ -899,7 +899,7 @@ impl CollisionStructure {
     pub fn new(collision_range: f32, bounds: SMatrix<f32,2,2>) -> CollisionStructure {
         let mut n = SVector::<usize,2>::new(0,0);
         // Require at least one bin in each direction, even if `bounds` is smaller than collision range.
-        for i in 0..2 {n[i] = usize::max(1, ((bounds[(i,1)] - bounds[(i,0)])/(2.0*collision_range)) as usize);}
+        for i in 0..2 {n[i] = usize::max(1, ((bounds[(i,1)] - bounds[(i,0)])/collision_range) as usize);}
         let mut bin_size = SVector::<f32,2>::zeros();
         for i in 0..2 {bin_size[i] = (bounds[(i,1)] - bounds[(i,0)])/(n[i] as f32);}
         let mut index_bins = Vec::<Vec<usize>>::new();
