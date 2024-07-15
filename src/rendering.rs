@@ -93,21 +93,23 @@ pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen_state: &mut
     } // j
 }
 
-pub fn transform_and_draw_panel(player: &Player, panel: &VerticalPanel,
-                                screen: &mut Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+pub fn transform_and_draw_panel(player: &Player, panel: &VerticalPanel, screen_state: &mut ScreenState){
     let p0 = SVector::<f32,3>::new(panel.x0[0], panel.x0[1], panel.z_top);
     let p1 = SVector::<f32,3>::new(panel.x1[0], panel.x1[1], panel.z_top);
     let p2 = SVector::<f32,3>::new(panel.x0[0], panel.x0[1], panel.z_bottom);
     let pp0 = transform_for_player(&p0, &player);
     let pp1 = transform_for_player(&p1, &player);
     let pp2 = transform_for_player(&p2, &player);
-    render_parallelogram(&pp0, &pp1, &pp2, panel.texture, screen, z_buffer, bright_mask, false, true, false);
+    render_parallelogram(&pp0, &pp1, &pp2, panel.texture, false, true, false, screen_state);
 }
 
-pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
-                            x2: &SVector<f32,3>, texture: &Surface,
-                            screen: &Surface, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>,
-                            full_bright: bool, transparent: bool, tile: bool){
+pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVector<f32,3>, texture: &Surface,
+                            full_bright: bool, transparent: bool, tile: bool, screen_state: &mut ScreenState){
+
+    let z_buffer = &mut screen_state.z_buffer;
+    let bright_mask = &mut screen_state.bright_mask;
+    let screen = &mut screen_state.drawing_surface;
+
     let v1 = x1 - x0;
     let v2 = x2 - x0;
     let x3 = x0 + v1 + v2;
@@ -213,10 +215,8 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>,
     } // i
 }
 
-pub fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
-                                 x: &SVector<f32,3>, width: f32, height: f32,
-                                 player: &Player, z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>,
-                                 full_bright: bool){
+pub fn transform_and_draw_sprite(source: &Surface, x: &SVector<f32,3>, width: f32, height: f32,
+                                 player: &Player, full_bright: bool, screen_state: &mut ScreenState){
     let x_trans = transform_for_player(&x, player);
     // Define surface to always face player after transforming center point:
     let x0 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
@@ -225,13 +225,12 @@ pub fn transform_and_draw_sprite(source: &Surface, dest: &mut Surface,
                                    x_trans[1]-0.5*height, x_trans[2]);
     let x2 = SVector::<f32,3>::new(x_trans[0]-0.5*width,
                                    x_trans[1]+0.5*height, x_trans[2]);
-    render_parallelogram(&x0, &x1, &x2, source, dest, z_buffer, bright_mask, full_bright, true, false);
+    render_parallelogram(&x0, &x1, &x2, source, full_bright, true, false, screen_state);
 }
 
 // This is for rendering 2D HUD elements and updating the z-buffer to skip
 // any 3D geometry behind them.
-pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
-                      z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
+pub fn draw_sprite_2d(source: &Surface, rect: &Rect, screen_state: &mut ScreenState){
     let w = rect.width() as f32;
     let h = rect.height() as f32;
     let s_w = source.width() as f32;
@@ -248,12 +247,12 @@ pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
         let s_y = (s_h*((j-(y as i32)) as f32)/h) as i32;
         for i in i0..i1{
             let s_x = (s_w*((i-(x as i32)) as f32)/w) as i32;
-            if(transfer_pixel_transparent(source, dest, s_x, s_y, i, j)){
+            if(transfer_pixel_transparent(source, &mut screen_state.drawing_surface, s_x, s_y, i, j)){
                 // If the pixel is non-transparent, set the z-buffer to zero
                 // to block anything from rendering over the 2D sprite.
-                z_buffer[(j as usize,i as usize)] = 0.0;
+                screen_state.z_buffer[(j as usize,i as usize)] = 0.0;
                 // All 2D sprites are full-bright.
-                bright_mask[(j as usize,i as usize)] = 1;
+                screen_state.bright_mask[(j as usize,i as usize)] = 1;
             } // if
         } // i
     } // j
@@ -261,11 +260,6 @@ pub fn draw_sprite_2d(source: &Surface, dest: &mut Surface, rect: &Rect,
 
 pub fn transform_and_draw_floor(source: &Surface, player: &Player, x_low: f32, x_high: f32,
                                 y_low: f32, y_high: f32, ceiling: bool, screen_state: &mut ScreenState){
-
-    let z_buffer = &mut screen_state.z_buffer;
-    let dest = &mut screen_state.drawing_surface;
-    let bright_mask = &mut screen_state.bright_mask;
-
     let z = if(ceiling){0.5*(WALL_H as f32)}else{-0.5*(WALL_H as f32)};
     let x0 = SVector::<f32,3>::new(x_low, y_low, z);
     let x1 = SVector::<f32,3>::new(x_high, y_low, z);
@@ -273,7 +267,7 @@ pub fn transform_and_draw_floor(source: &Surface, player: &Player, x_low: f32, x
     let p0 = transform_for_player(&x0, &player);
     let p1 = transform_for_player(&x1, &player);
     let p2 = transform_for_player(&x2, &player);
-    render_parallelogram(&p0, &p1, &p2, source, dest, z_buffer, bright_mask, false, false, true);
+    render_parallelogram(&p0, &p1, &p2, source, false, false, true, screen_state);
 }
 
 pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,3> {
@@ -295,24 +289,19 @@ pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,
 // Darken `draw_surf` based on `z_buffer`, with brightness drop-off dictated by `length_scale`. Negative length scale
 // indicates full-bright lighting, and the function is a no-op.
 pub fn depth_darkening(length_scale: f32, screen_state: &mut ScreenState) {
-
-    let z_buffer = &mut screen_state.z_buffer;
-    let draw_surf = &mut screen_state.drawing_surface;
-    let bright_mask = &mut screen_state.bright_mask;
-
     if(length_scale < 0.0){return;}
     let l2 = length_scale*length_scale;
     for i in 0..H {
         let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
         for j in 0..W {
-            if(bright_mask[(i as usize, j as usize)] != 0){continue;}
+            if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
             let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
-            let z = z_buffer[(i as usize, j as usize)];
+            let z = screen_state.z_buffer[(i as usize, j as usize)];
             let dist2 = z*z*(1.0 + tan_i*tan_i + tan_j*tan_j);
             // Heuristic based on aesthetic considerations:
             //let scale = (-dist2.sqrt()/length_scale).exp();
             let scale = 1.0/((dist2/l2) + 1.0);
-            scale_pixel(draw_surf, j as i32, i as i32, scale);
+            scale_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, scale);
         } // j
     } // i
 }

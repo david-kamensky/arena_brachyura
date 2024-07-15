@@ -193,13 +193,9 @@ impl<'a> Player<'a> {
     }
     pub fn render_gun_and_projectile(self: &Player<'a>, screen_state: &mut ScreenState){
 
-        let z_buffer = &mut screen_state.z_buffer;
-        let dest = &mut screen_state.drawing_surface;
-        let bright_mask = &mut screen_state.bright_mask;
-
         // Draw the score bar as part of the player HUD.
         let score_bar_rect = Rect::new(0,0,W, ((H as f32)*3.0*SCORE_BAR_HEIGHT_FRAC) as u32);
-        draw_sprite_2d(self.score_bar_background, dest, &score_bar_rect, z_buffer, bright_mask);
+        draw_sprite_2d(self.score_bar_background, &score_bar_rect, screen_state);
         // Width of gun image on screen:
         let gun_screen_w = PL_GUN_SCREEN_FRAC*(W as f32);
         // Scale height proportionally based on input image:
@@ -209,21 +205,17 @@ impl<'a> Player<'a> {
                                  (H - (gun_screen_h as u32)).try_into().unwrap(),
                                  gun_screen_w as u32, gun_screen_h as u32);
         if(self.projectile.splash_time > 0){
-            transform_and_draw_sprite(self.projectile.splash_sprite, dest,
-                                      &self.projectile.x,
-                                      2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
-                                      self, z_buffer, bright_mask, true);
+            transform_and_draw_sprite(self.projectile.splash_sprite, &self.projectile.x,
+                                      2.0*PL_PROJ_R, 2.0*PL_PROJ_R, self, true, screen_state);
         }
         if(self.projectile.ready){
-            draw_sprite_2d(self.gun_ready_sprite, dest, &gun_rect, z_buffer, bright_mask);
+            draw_sprite_2d(self.gun_ready_sprite, &gun_rect, screen_state);
             return;
         }else{
-            draw_sprite_2d(self.gun_sprite, dest, &gun_rect, z_buffer, bright_mask);
+            draw_sprite_2d(self.gun_sprite, &gun_rect, screen_state);
         }
-        transform_and_draw_sprite(self.projectile.sprite, dest,
-                                  &self.projectile.x,
-                                  2.0*PL_PROJ_R, 2.0*PL_PROJ_R,
-                                  self, z_buffer, bright_mask, true);
+        transform_and_draw_sprite(self.projectile.sprite, &self.projectile.x,
+                                  2.0*PL_PROJ_R, 2.0*PL_PROJ_R, self, true, screen_state);
     }
     pub fn enforce_speed_limit(&self, a: &mut SVector::<f32,2>,
                                limit_type: SpeedLimitType){
@@ -345,16 +337,13 @@ impl<'a> Monster<'a> {
 
         let x_center = SVector::<f32,3>::new(self.x[0], self.x[1], self.z);
         let dead = self.dead();
-        transform_and_draw_sprite(if(dead){self.dead_sprite}
-                                  else{self.sprite},
-                                  dest, &x_center,
-                                  2.0*MONSTER_R, 2.0*MONSTER_R,
-                                  player, z_buffer, bright_mask, dead);
+        transform_and_draw_sprite(if(dead){self.dead_sprite}else{self.sprite},
+                                  &x_center, 2.0*MONSTER_R, 2.0*MONSTER_R,
+                                  player, dead, screen_state);
         if(self.spawn_timer > 0){
-            transform_and_draw_sprite(self.spawn_sprite,
-                                      dest, &self.x_spawn,
+            transform_and_draw_sprite(self.spawn_sprite, &self.x_spawn,
                                       2.0*MONSTER_R, 2.0*MONSTER_R,
-                                      player, z_buffer, bright_mask, true);
+                                      player, true, screen_state);
         }
     }
     pub fn die(self: &mut Monster<'a>){self.dead_timer = DEATH_TIME;}
@@ -578,9 +567,8 @@ impl<'a> VerticalPanel<'a> {
         let z_floor = -0.5*(WALL_H as f32);
         VerticalPanel{x0: x - v, x1: x + v, z_bottom: z_floor, z_top: z_floor + GRASS_H, texture: texture}
     }
-    pub fn render(&self, player: &Player, dest: &mut Surface,
-                  z_buffer: &mut DMatrix<f32>, bright_mask: &mut DMatrix<u8>){
-        transform_and_draw_panel(player, self, dest, z_buffer, bright_mask);
+    pub fn render(&self, player: &Player, screen_state: &mut ScreenState){
+        transform_and_draw_panel(player, self, screen_state);
     }
     pub fn closest_point(&self, x: &SVector<f32,2>) -> SVector<f32,2>{
         let dx = self.x1 - self.x0;
@@ -756,14 +744,9 @@ impl<'a> Level<'a> {
     }
 
     pub fn draw_all_walls(&self, player: &Player, screen_state: &mut ScreenState){
-
-        let z_buffer = &mut screen_state.z_buffer;
-        let dest = &mut screen_state.drawing_surface;
-        let bright_mask = &mut screen_state.bright_mask;
-
-        for w in self.walls.iter() {w.render(player, dest, z_buffer, bright_mask);}
+        for w in self.walls.iter() {w.render(player, screen_state);}
         if(self.has_grass){
-            for g in self.grass.iter() {g.render(player, dest, z_buffer, bright_mask);}
+            for g in self.grass.iter() {g.render(player, screen_state);}
         }
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
@@ -1039,17 +1022,13 @@ impl<'a> Game<'a> {
 
     pub fn draw_minimap(&self, screen_state: &mut ScreenState){
 
-        let z_buffer = &mut screen_state.z_buffer;
-        let draw_surf = &mut screen_state.drawing_surface;
-        let bright_mask = &mut screen_state.bright_mask;
-
         // TODO: Parameterize with constants.
         let minimap_w = 128 as i32;
         let minimap_dot_w = 6;
         let minimap_x = (W as i32) - minimap_w;
         let minimap_y = (H as i32) - minimap_w;
         let minimap_rect = Rect::new(minimap_x, minimap_y, minimap_w as u32, minimap_w as u32);
-        draw_surf.fill_rect(minimap_rect, Color::RGB(16,16,16));
+        screen_state.drawing_surface.fill_rect(minimap_rect, Color::RGB(16,16,16));
         let minimap_center = SVector::<f32,2>::new((minimap_x as f32) + 0.5*(minimap_w as f32),
                                                    (minimap_y as f32) + 0.5*(minimap_w as f32));
         for monster in &self.monsters {
@@ -1066,23 +1045,23 @@ impl<'a> Game<'a> {
                 let monst_rect = Rect::new((x_monst_screen[0] as i32) - minimap_dot_w/2,
                                            (x_monst_screen[1] as i32) - minimap_dot_w/2,
                                            minimap_dot_w as u32, minimap_dot_w as u32);
-                draw_surf.fill_rect(monst_rect, Color::RGB(255,0,0));
+                screen_state.drawing_surface.fill_rect(monst_rect, Color::RGB(255,0,0));
             }
         } // monster
         let player_rect = Rect::new((minimap_center[0] as i32) - minimap_dot_w/2,
                                     (minimap_center[1] as i32) - minimap_dot_w/2,
                                     minimap_dot_w as u32, minimap_dot_w as u32);
-        draw_surf.fill_rect(player_rect, Color::RGB(0,255,0));
+        screen_state.drawing_surface.fill_rect(player_rect, Color::RGB(0,255,0));
 
         // Add cover over minimap:
-        draw_sprite_2d(&self.player.minimap_cover, draw_surf, &minimap_rect, z_buffer, bright_mask);
+        draw_sprite_2d(&self.player.minimap_cover, &minimap_rect, screen_state);
 
         // Fill in z-buffer with zeros, so this can be drawn first to speed up floor rendering; cover
         // image is mostly transparent, so this needs to be done manually.
         for i in minimap_x..(W as i32) {
             for j in minimap_y..(H as i32) {
-                z_buffer[(j as usize, i as usize)] = 0.0;
-                bright_mask[(j as usize, i as usize)] = 1;
+                screen_state.z_buffer[(j as usize, i as usize)] = 0.0;
+                screen_state.bright_mask[(j as usize, i as usize)] = 1;
             } // j
         } // i
     }
