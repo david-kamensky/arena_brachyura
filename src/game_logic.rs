@@ -67,8 +67,8 @@ impl<'a> Projectile<'a> {
     pub fn collide_with_level(&mut self, level: &Level){
         if(self.ready){return;}
         // Check collision with floor and possibly ceiling:
-        if((self.x[2] < (-0.5*(WALL_H as f32) + PL_PROJ_R))
-           || (level.has_ceiling && (self.x[2] > (0.5*(WALL_H as f32) - PL_PROJ_R)))){
+        if((self.x[2] < (-0.5*WALL_H + PL_PROJ_R))
+           || (level.has_ceiling && (self.x[2] > (0.5*WALL_H - PL_PROJ_R)))){
             self.reset();
             return;
         }
@@ -550,21 +550,21 @@ pub struct VerticalPanel<'a> {
 
 impl<'a> VerticalPanel<'a> {
     pub fn new_wall(x0: SVector<f32,2>, x1: SVector<f32,2>, texture: &'a Surface<'a>) -> VerticalPanel<'a> {
-        let z_bottom = -0.5*(WALL_H as f32);
-        let z_top = 0.5*(WALL_H as f32);
+        let z_bottom = -0.5*WALL_H;
+        let z_top = 0.5*WALL_H;
         VerticalPanel{x0: x0, x1: x1, z_bottom: z_bottom, z_top: z_top, texture: texture}
     }
     pub fn new_tree(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> (VerticalPanel<'a>, VerticalPanel<'a>) {
         let v_first = 0.5*TREE_W*SVector::<f32,2>::new(theta.cos(), theta.sin());
         let v_second = SVector::<f32,2>::new(-v_first[1], v_first[0]);
-        let z_bottom = -0.5*(WALL_H as f32);
+        let z_bottom = -0.5*WALL_H;
         let z_top = z_bottom + TREE_H;
         (VerticalPanel{x0: x - v_first, x1: x + v_first, z_bottom: z_bottom, z_top: z_top, texture: texture},
          VerticalPanel{x0: x - v_second, x1: x + v_second, z_bottom: z_bottom, z_top: z_top, texture: texture})
     }
     pub fn new_grass(x: SVector<f32,2>, theta: f32, texture: &'a Surface<'a>) -> VerticalPanel<'a> {
         let v = 0.5*GRASS_H*SVector::<f32,2>::new(theta.cos(), theta.sin());
-        let z_floor = -0.5*(WALL_H as f32);
+        let z_floor = -0.5*WALL_H;
         VerticalPanel{x0: x - v, x1: x + v, z_bottom: z_floor, z_top: z_floor + GRASS_H, texture: texture}
     }
     pub fn render(&self, player: &Player, screen_state: &mut ScreenState){
@@ -645,24 +645,23 @@ impl<'a> Level<'a> {
         let move_index = 2*(rng.gen_range(0..4));
         let mut pts = Vec::<SVector<f32,2>>::new();
         // Generate points in order:
-        let WHF = WALL_H as f32;
-        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]));
-        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]+WHF));
-        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]+2.0*WHF));
-        pts.push(SVector::<f32,2>::new(x[0]+WHF    ,x[1]+2.0*WHF));
-        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]+2.0*WHF));
-        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]+WHF));
-        pts.push(SVector::<f32,2>::new(x[0]+2.0*WHF,x[1]));
-        pts.push(SVector::<f32,2>::new(x[0]+WHF    ,x[1]));
-        pts.push(SVector::<f32,2>::new(x[0]        ,x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]           , x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]           , x[1]+WALL_H));
+        pts.push(SVector::<f32,2>::new(x[0]           , x[1]+2.0*WALL_H));
+        pts.push(SVector::<f32,2>::new(x[0]+WALL_H    , x[1]+2.0*WALL_H));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WALL_H, x[1]+2.0*WALL_H));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WALL_H, x[1]+WALL_H));
+        pts.push(SVector::<f32,2>::new(x[0]+2.0*WALL_H, x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]+WALL_H    , x[1]));
+        pts.push(SVector::<f32,2>::new(x[0]           , x[1]));
         // Move one toward the center and add a spawn point where it used
         // to be:
         let temp_pt = pts[move_index];
-        pts[move_index] = SVector::<f32,2>::new(x[0]+WHF, x[1]+WHF);
+        pts[move_index] = SVector::<f32,2>::new(x[0]+WALL_H, x[1]+WALL_H);
         let spawn_pt = 0.5*(temp_pt + pts[move_index]);
         self.spawns.push(spawn_pt);
         if((move_index == 0) || (move_index == 8)){
-            pts[8] = SVector::<f32,2>::new(x[0]+WHF, x[1]+WHF);
+            pts[8] = SVector::<f32,2>::new(x[0]+WALL_H, x[1]+WALL_H);
         }
         for i in 1..9 {
             self.walls.push(VerticalPanel::new_wall(pts[i-1], pts[i], self.inner_wall_texture));
@@ -674,7 +673,6 @@ impl<'a> Level<'a> {
         self.spawns = Vec::<SVector<f32,2>>::new();
         let mut col: i32 = -1;
         let mut factor: f32 = 6.0;
-        let WHF = WALL_H as f32;
         // `n_row` x `n_col` grid cells:
         let n_row = 4;
         let n_col = 4;
@@ -694,48 +692,48 @@ impl<'a> Level<'a> {
                 } // loop
                 layout[(row as usize, col as usize)] = 1;
                 if(self.has_trees){
-                    self.add_tree_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 2.0)*WHF, (4.0*(row as f32) + 2.0)*WHF), rng)
+                    self.add_tree_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 2.0)*WALL_H, (4.0*(row as f32) + 2.0)*WALL_H), rng)
                 }else{
-                    self.add_wall_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WHF, (4.0*(row as f32) + 1.0)*WHF), rng);
+                    self.add_wall_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WALL_H, (4.0*(row as f32) + 1.0)*WALL_H), rng);
                 }
             } // pillar
         } // row
 
         // Exterior walls:
         let x_min = 0.0;
-        let x_max = 4.0*(n_col as f32)*WHF;
+        let x_max = 4.0*(n_col as f32)*WALL_H;
         let y_min = 0.0;
-        let y_max = 4.0*(n_row as f32)*WHF;
+        let y_max = 4.0*(n_row as f32)*WALL_H;
         for i in 0..(4*n_row) {
-            let y_start = (i as f32)*WHF;
-            let y_end = ((i+1) as f32)*WHF;
+            let y_start = (i as f32)*WALL_H;
+            let y_end = ((i+1) as f32)*WALL_H;
             self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_min, y_start), SVector::<f32,2>::new(x_min, y_end), self.outer_wall_texture));
             self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_max, y_start), SVector::<f32,2>::new(x_max, y_end), self.outer_wall_texture));
         } // i
         for i in 0..(4*n_col) {
-            let x_start = (i as f32)*WHF;
-            let x_end = ((i+1) as f32)*WHF;
+            let x_start = (i as f32)*WALL_H;
+            let x_end = ((i+1) as f32)*WALL_H;
             self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_start, y_min), SVector::<f32,2>::new(x_end, y_min), self.outer_wall_texture));
             self.walls.push(VerticalPanel::new_wall(SVector::<f32,2>::new(x_start, y_max), SVector::<f32,2>::new(x_end, y_max), self.outer_wall_texture));
         } // i
 
         // Set level bounds:
         self.bounds[(0,0)] = 0.0;
-        self.bounds[(0,1)] = 4.0*WHF*(n_col as f32);
+        self.bounds[(0,1)] = 4.0*WALL_H*(n_col as f32);
         self.bounds[(1,0)] = 0.0;
-        self.bounds[(1,1)] = 4.0*WHF*(n_row as f32);
+        self.bounds[(1,1)] = 4.0*WALL_H*(n_row as f32);
 
         if(self.has_grass){
             for i in 0..(4*GRASS_PER_WALL*n_row){
                 for j in 0..(4*GRASS_PER_WALL*n_col){
-                    let x = (WHF/(GRASS_PER_WALL as f32))*SVector::<f32,2>::new((i as f32)+0.5, (j as f32)+0.5);
+                    let x = (WALL_H/(GRASS_PER_WALL as f32))*SVector::<f32,2>::new((i as f32)+0.5, (j as f32)+0.5);
                     self.add_grass_at(x, rng);
                 }
             }
         } // if grass
 
         // Populate wall collision structure once after adding all walls.
-        let collision_r = WHF + f32::max(PLAYER_R, f32::max(PL_PROJ_R, MONSTER_R));
+        let collision_r = WALL_H + f32::max(PLAYER_R, f32::max(PL_PROJ_R, MONSTER_R));
         self.wall_collision_structure = CollisionStructure::new(collision_r, self.bounds);
         for i in 0..(self.walls.len()) {
             let x = 0.5*(self.walls[i].x0 + self.walls[i].x1);
@@ -1038,7 +1036,7 @@ impl<'a> Game<'a> {
             let sin_yaw = self.player.yaw.sin();
             let x_monst = SVector::<f32,2>::new(x_monst_trans[0]*cos_yaw - x_monst_trans[1]*sin_yaw,
                                                 -(x_monst_trans[0]*sin_yaw + x_monst_trans[1]*cos_yaw));
-            let minimap_r = 8.0*(WALL_H as f32);
+            let minimap_r = 8.0*WALL_H;
             let x_monst_screen = 0.5*(minimap_w as f32)*x_monst/minimap_r + minimap_center;
             if(((x_monst_screen[0] as i32) > (minimap_x + minimap_dot_w/2)) &&
                ((x_monst_screen[1] as i32) > (minimap_y + minimap_dot_w/2))){
