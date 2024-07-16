@@ -606,22 +606,25 @@ struct Level<'a> {
 }
 
 impl<'a> Level<'a> {
-    pub fn new(texture_set: &'a TextureSet<'a>,
-               parameters: &'a GameParameters) -> Level<'a> {
-        Level{walls: Vec::<VerticalPanel>::new(),
-              grass: Vec::<VerticalPanel>::new(),
-              spawns: Vec::<SVector<f32,2>>::new(),
-              inner_wall_texture: &texture_set.inner_wall_texture,
-              outer_wall_texture: &texture_set.outer_wall_texture,
-              floor_texture: &texture_set.floor_texture,
-              grass_texture: &texture_set.grass_texture,
-              sky_texture: &texture_set.sky_texture,
-              has_ceiling: parameters.has_ceiling,
-              has_grass: parameters.has_grass,
-              has_trees: parameters.has_trees,
-              bounds: SMatrix::<f32,2,2>::zeros(),
-              // NOTE: Placeholder to be replaced later.
-              wall_collision_structure: CollisionStructure::new(1.0, SMatrix::<f32,2,2>::zeros()),}
+    pub fn new(texture_set: &'a TextureSet<'a>, parameters: &'a GameParameters, rng: &mut SmallRng) -> Level<'a> {
+        let mut level = Level{walls: Vec::<VerticalPanel>::new(),
+                              grass: Vec::<VerticalPanel>::new(),
+                              spawns: Vec::<SVector<f32,2>>::new(),
+                              inner_wall_texture: &texture_set.inner_wall_texture,
+                              outer_wall_texture: &texture_set.outer_wall_texture,
+                              floor_texture: &texture_set.floor_texture,
+                              grass_texture: &texture_set.grass_texture,
+                              sky_texture: &texture_set.sky_texture,
+                              has_ceiling: parameters.has_ceiling,
+                              has_grass: parameters.has_grass,
+                              has_trees: parameters.has_trees,
+                              bounds: SMatrix::<f32,2,2>::zeros(),
+                              // NOTE: Placeholder to be replaced immediately by call to `add_walls_randomly`.
+                              wall_collision_structure: CollisionStructure::new(1.0, SMatrix::<f32,2,2>::zeros()),};
+        // FIXME: Generate data w/ static methods first, then create `struct` instead of creating as mutable
+        // and overwriting placeholder.
+        level.add_walls_randomly(rng);
+        return level;
     }
     pub fn add_grass_at(&mut self, x: SVector<f32,2>, rng: &mut SmallRng){
         let theta = 2.0*PI*rand_01(rng);
@@ -935,8 +938,7 @@ impl<'a> Game<'a> {
     pub fn new(parameters: &'a GameParameters, cmd_args: &'a CmdArgs,
                texture_set: &'a TextureSet<'a>,
                rng: &mut SmallRng) -> Game<'a>{
-        let mut level = Level::<'a>::new(texture_set, parameters);
-        level.add_walls_randomly(rng);
+        let level = Level::<'a>::new(texture_set, parameters, rng);
         let collision_r = MONSTER_R + f32::max(PL_PROJ_R, PLAYER_R);
         let mut monster_collision_structure = CollisionStructure::new(collision_r, level.bounds);
         let mut game
