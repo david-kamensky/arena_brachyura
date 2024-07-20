@@ -65,7 +65,8 @@ fn main() -> Result<(), String> {
     let mut level_directory = &texture_set_list[texture_set_index];
     let mut texture_set = TextureSet::new(data_filename(level_directory), format);
     let mut cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
-    let mut parameters = GameParameters::new(data_filename(&cfg_filename));
+    let mut num_consecutive_wins: u32 = 0;
+    let mut parameters = GameParameters::new(data_filename(&cfg_filename), num_consecutive_wins);
 
     let mut level_seed: u64 = start_level as u64;
     let mut rng = SmallRng::seed_from_u64(level_seed);
@@ -82,7 +83,6 @@ fn main() -> Result<(), String> {
     }
 
     // Main game loop:
-    let mut num_consecutive_wins: u32 = 0;
     loop {
         let mut t_start: i32 = timer.ticks() as i32;
         let game_state = game.update_state(dt, &mut event_pump, &mut rng);
@@ -102,7 +102,7 @@ fn main() -> Result<(), String> {
                     level_directory = &texture_set_list[texture_set_index];
                     texture_set = TextureSet::new(data_filename(level_directory), format);
                     cfg_filename = level_directory.to_owned() + "/" + PARAM_FILENAME;
-                    parameters = GameParameters::new(data_filename(&cfg_filename));
+                    parameters = GameParameters::new(data_filename(&cfg_filename), num_consecutive_wins);
                     rng = SmallRng::seed_from_u64(level_seed);
                     game = Game::new(&parameters, &cmd_args, &texture_set, &mut rng);},
             GameState::Lose

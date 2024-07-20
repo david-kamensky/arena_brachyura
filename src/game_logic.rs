@@ -68,7 +68,7 @@ impl<'a> Projectile<'a> {
         if(self.ready){return;}
         // Check collision with floor and possibly ceiling:
         if((self.x[2] < (-0.5*WALL_H + PL_PROJ_R))
-           || (level.has_ceiling && (self.x[2] > (0.5*WALL_H - PL_PROJ_R)))){
+           || (level.parameters.has_ceiling && (self.x[2] > (0.5*WALL_H - PL_PROJ_R)))){
             self.reset();
             return;
         }
@@ -372,7 +372,8 @@ impl<'a> Monster<'a> {
         if((norm_x_diff < r_sum) && (norm_z_diff < r_sum)){
             self.die();
             let n = x_diff/norm_x_diff;
-            target.score -= SCORE_CHANGE;
+            // Increases difficulty as win streak progresses:
+            target.score -= ((level.parameters.num_consecutive_wins+1) as f32)*SCORE_BASE_DECREASE;
             target.v -= DAMAGE_IMPULSE*n;
             return;
         } // end if colliding player
@@ -420,6 +421,7 @@ pub fn collide_monster_pair(monsters: &mut Vec<Monster>, i: usize, j: usize){
 }
 
 pub struct GameParameters {
+    pub num_consecutive_wins: u32,
     pub has_ceiling: bool,
     pub has_grass: bool,
     pub has_trees: bool,
@@ -427,7 +429,7 @@ pub struct GameParameters {
 }
 
 impl GameParameters {
-    pub fn new(cfg_filename: String) -> GameParameters {
+    pub fn new(cfg_filename: String, num_consecutive_wins: u32) -> GameParameters {
 
         // Default values for parameters:
         let mut has_ceiling = false;
@@ -464,7 +466,8 @@ impl GameParameters {
         println!("  has_trees = {}", has_trees);
         println!("  darkening_length_scale = {}", darkening_length_scale);
         return GameParameters{has_ceiling: has_ceiling, has_grass: has_grass, has_trees: has_trees,
-                              darkening_length_scale: darkening_length_scale};
+                              darkening_length_scale: darkening_length_scale,
+                              num_consecutive_wins: num_consecutive_wins};
     } // line
 }
 
@@ -598,9 +601,7 @@ struct Level<'a> {
     pub floor_texture: &'a Surface<'a>,
     pub grass_texture: &'a Surface<'a>,
     pub sky_texture: &'a Surface<'a>,
-    pub has_ceiling: bool,
-    pub has_grass: bool,
-    pub has_trees: bool,
+    pub parameters: &'a GameParameters,
     pub bounds: SMatrix<f32,2,2>,
     pub wall_collision_structure: CollisionStructure,
 }
@@ -615,9 +616,7 @@ impl<'a> Level<'a> {
                               floor_texture: &texture_set.floor_texture,
                               grass_texture: &texture_set.grass_texture,
                               sky_texture: &texture_set.sky_texture,
-                              has_ceiling: parameters.has_ceiling,
-                              has_grass: parameters.has_grass,
-                              has_trees: parameters.has_trees,
+                              parameters: parameters,
                               bounds: SMatrix::<f32,2,2>::zeros(),
                               // NOTE: Placeholder to be replaced immediately by call to `add_walls_randomly`.
                               wall_collision_structure: CollisionStructure::new(1.0, SMatrix::<f32,2,2>::zeros()),};
@@ -694,7 +693,7 @@ impl<'a> Level<'a> {
                        && (!((row==0) && (col==0)))){break;}
                 } // loop
                 layout[(row as usize, col as usize)] = 1;
-                if(self.has_trees){
+                if(self.parameters.has_trees){
                     self.add_tree_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 2.0)*WALL_H, (4.0*(row as f32) + 2.0)*WALL_H), rng)
                 }else{
                     self.add_wall_pillar(SVector::<f32,2>::new((4.0*(col as f32) + 1.0)*WALL_H, (4.0*(row as f32) + 1.0)*WALL_H), rng);
@@ -726,7 +725,7 @@ impl<'a> Level<'a> {
         self.bounds[(1,0)] = 0.0;
         self.bounds[(1,1)] = 4.0*WALL_H*(n_row as f32);
 
-        if(self.has_grass){
+        if(self.parameters.has_grass){
             for i in 0..(4*GRASS_PER_WALL*n_row){
                 for j in 0..(4*GRASS_PER_WALL*n_col){
                     let x = (WALL_H/(GRASS_PER_WALL as f32))*SVector::<f32,2>::new((i as f32)+0.5, (j as f32)+0.5);
@@ -746,7 +745,7 @@ impl<'a> Level<'a> {
 
     pub fn draw_all_walls(&self, player: &Player, screen_state: &mut ScreenState){
         for w in self.walls.iter() {w.render(player, screen_state);}
-        if(self.has_grass){
+        if(self.parameters.has_grass){
             for g in self.grass.iter() {g.render(player, screen_state);}
         }
     } // draw_all_walls
@@ -986,7 +985,7 @@ impl<'a> Game<'a> {
             let monster_x = SVector::<f32,3>::new(monster.x[0], monster.x[1], monster.z);
             if((monster_x - proj_x).norm() < MONSTER_R){
                 self.player.projectile.reset();
-                self.player.score += SCORE_CHANGE;
+                self.player.score += SCORE_INCREASE;
                 monster.die();
             }
         } // i
