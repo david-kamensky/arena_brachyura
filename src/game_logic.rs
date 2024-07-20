@@ -585,6 +585,9 @@ impl<'a> VerticalPanel<'a> {
             s*dx + self.x0
         }
     }
+    pub fn centroid(&self) -> SVector<f32,2>{
+        return 0.5*(self.x0 + self.x1);
+    }
 } // impl VerticalPanel
 
 // TODO: Smarter way to get random float in (0,1)?
@@ -738,16 +741,19 @@ impl<'a> Level<'a> {
         let collision_r = WALL_H + f32::max(PLAYER_R, f32::max(PL_PROJ_R, MONSTER_R));
         self.wall_collision_structure = CollisionStructure::new(collision_r, self.bounds);
         for i in 0..(self.walls.len()) {
-            let x = 0.5*(self.walls[i].x0 + self.walls[i].x1);
-            self.wall_collision_structure.add_point(&x, i);
+            self.wall_collision_structure.add_point(&(self.walls[i].centroid()), i);
         } // wall
     }
 
     pub fn draw_all_walls(&self, player: &Player, screen_state: &mut ScreenState){
         for w in self.walls.iter() {w.render(player, screen_state);}
         if(self.parameters.has_grass){
-            for g in self.grass.iter() {g.render(player, screen_state);}
-        }
+            for g in self.grass.iter() {
+                if((player.x - g.centroid()).norm() < GRASS_RENDER_DIST){
+                    g.render(player, screen_state);
+                } // if close enough
+            } // g
+        } // if grass
     } // draw_all_walls
     pub fn collide_player_with_walls(self: &Level<'a>, player: &mut Player){
         for i in self.wall_collision_structure.indices_near(&(player.x)) {

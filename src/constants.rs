@@ -16,6 +16,7 @@ pub static WALL_H: f32 = 480.0;
 pub static FLOOR_TILE_W: f32 = WALL_H;
 pub static GRASS_H: f32 = 160.0;
 pub static GRASS_PER_WALL: usize = 3;
+pub static GRASS_RENDER_DIST: f32 = 3e3;
 pub static TREE_W: f32 = 640.0;
 pub static TREE_H: f32 = 1000.0;
 pub static PLAYER_SPEED: f32 = 1.2;
