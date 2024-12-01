@@ -1117,8 +1117,17 @@ impl<'a> Game<'a> {
             }
         }
 
-        // Post-processing filter that adds a depth-darkening effect.  Must run last.
+        // Post-processing filter that adds a depth-darkening effect.
         depth_darkening(self.parameters.darkening_length_scale, screen_state);
+
+        // Add effect of dynamic lights:
+        // TODO: Populate collision structure with multiple dynamic lights; for now only including projectile.
+        // TODO: Make colors and length scales of projectile and other dynamic light types parameters in level configuration file.
+        let light = DynamicLight{x: self.player.projectile.x,
+                                 rgb: SVector::<f32,3>::new(0.0,1.0,0.0),
+                                 length_scale:
+                                 if(self.player.projectile.ready && (self.player.projectile.splash_time <= 0)){0.0}else{1e2}};
+        apply_dynamic_lighting(&light, &self.player, screen_state);
     }
 }
 

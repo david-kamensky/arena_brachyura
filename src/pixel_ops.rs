@@ -7,6 +7,8 @@ extern crate sdl2;
 use sdl2::surface::Surface;
 use std::ffi::c_void;
 
+use nalgebra::SVector;
+
 // Most general pixel transfer function; useful for debugging and prototyping, but has too much branching logic
 // for optimal use tight loops.  Returns true if the pixel was transferred, false if not (e.g., for transparency
 // or out-of-bounds.)
@@ -133,5 +135,34 @@ pub fn scale_pixel(surf: &Surface, x: i32, y: i32, scale: f32) {
         std::ptr::copy_nonoverlapping(&scaled_r, pixels_offset as *mut u8, 1);
         std::ptr::copy_nonoverlapping(&scaled_g, pixels_offset.wrapping_add(1 as usize) as *mut u8, 1);
         std::ptr::copy_nonoverlapping(&scaled_b, pixels_offset.wrapping_add(2 as usize) as *mut u8, 1);
+    } // unsafe
+}
+
+// Brighten each color component additively, given floating-point RGB values. The RGB values are assumed to
+// be normalized such that a value of 1.0 corresponds to trying to add 255 to the corresponding pixel color
+// component.
+pub fn brighten_pixel(surf: &Surface, x: i32, y: i32, rgb: &SVector::<f32,3>) {
+
+    let bpp = surf.pixel_format_enum().byte_size_per_pixel() as i32;
+    let pitch = surf.pitch() as i32;
+    let offset: i32 = bpp*x + pitch*y;
+    unsafe {
+        let pixels: *mut c_void = (*surf.raw()).pixels;
+        let pixels_offset: *mut c_void = pixels.wrapping_add(offset as usize);
+        let mut r_f = *(pixels_offset as *const u8) as f32;
+        let mut g_f = *((pixels_offset.wrapping_add(1 as usize)) as *const u8) as f32;
+        let mut b_f = *((pixels_offset.wrapping_add(2 as usize)) as *const u8) as f32;
+        r_f += 255.0*rgb[0];
+        g_f += 255.0*rgb[1];
+        b_f += 255.0*rgb[2];
+        r_f = f32::min(f32::max(0.0, r_f), 255.0);
+        g_f = f32::min(f32::max(0.0, g_f), 255.0);
+        b_f = f32::min(f32::max(0.0, b_f), 255.0);
+        let r_u = r_f as u8;
+        let g_u = g_f as u8;
+        let b_u = b_f as u8;
+        std::ptr::copy_nonoverlapping(&r_u, pixels_offset as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&g_u, pixels_offset.wrapping_add(1 as usize) as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&b_u, pixels_offset.wrapping_add(2 as usize) as *mut u8, 1);
     } // unsafe
 }

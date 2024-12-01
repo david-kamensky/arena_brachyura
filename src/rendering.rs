@@ -19,9 +19,17 @@ use crate::pixel_ops::*;
 pub struct ScreenState<'a> {
     pub drawing_surface: Surface<'a>,
     pub z_buffer: DMatrix<f32>,
+    pub n_buffer: Vec::<SVector::<f32,3>>,
     // FIXME: Use a more memory-efficient representation of the full-bright mask, e.g., indexing into a bit-vec. (Or, use for
     // other per-pixel flags and differentiate w/ bitwise OR?)
     pub bright_mask: DMatrix<u8>,
+}
+
+pub fn column_major(i: usize, j: usize) -> usize {
+    return j*(H as usize) + i;
+}
+pub fn row_major(i: usize, j: usize) -> usize {
+    return i*(W as usize) + j;
 }
 
 impl<'a> ScreenState<'a> {
@@ -29,8 +37,9 @@ impl<'a> ScreenState<'a> {
         ScreenState{
             // NOTE: First three bytes of each pixel assumed to be RGB in low-level pixel operations; default for screen surface on only
             // system tested, but may not be guaranteed in general.
-            drawing_surface: Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB888).unwrap(),
+            drawing_surface: Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB24).unwrap(),
             z_buffer: DMatrix::<f32>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
+            n_buffer: vec![SVector::<f32,3>::new(0.0,0.0,0.0); (screen_surf.width()*screen_surf.height()) as usize],
             bright_mask: DMatrix::<u8>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
         }
     } // new
@@ -40,8 +49,14 @@ impl<'a> ScreenState<'a> {
         for i in 0..H{ for j in 0..W{
             self.z_buffer[(i as usize, j as usize)] = FAR_Z;
             self.bright_mask[(i as usize, j as usize)] = 0;
+            self.n_buffer[column_major(i as usize, j as usize)] = SVector::<f32,3>::new(0.0,0.0,0.0);
         }}
     } // reset
+
+    // Read from and write to the normal buffer as if it's logically 2D:
+    pub fn n(&self, i: usize, j: usize) -> &SVector::<f32,3>{
+        return &(self.n_buffer[column_major(i,j)]);
+    } // n
 }
 
 // NOTE: This interprets the pixel-space of the sky image as a spherical polar coordinate chart, so objects at higher
@@ -107,6 +122,7 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
                             full_bright: bool, transparent: bool, tile: bool, screen_state: &mut ScreenState){
 
     let z_buffer = &mut screen_state.z_buffer;
+    let n_buffer = &mut screen_state.n_buffer;
     let bright_mask = &mut screen_state.bright_mask;
     let screen = &mut screen_state.drawing_surface;
 
@@ -149,6 +165,10 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
     let t_h = texture.height() as f32;
     let t_w_i = texture.width() as i32;
     let t_h_i = texture.height() as i32;
+
+    // Normal vectors will be normalized after all of them have been set, to avoid
+    // unnecessary computations for occluded polygons.
+    let n = v1.cross(&v2);
 
     // Compute bounding box in screen-space:
 
@@ -208,8 +228,11 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
                 if(t_row < 0){t_row += t_h_i;}
             }
             if(transfer_pixel_no_bounds(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
-                z_buffer[(H2_j as usize, W2_i as usize)] = z;
-                bright_mask[(H2_j as usize, W2_i as usize)] = if(full_bright){1}else{0};
+                let s_row = H2_j as usize;
+                let s_col = W2_i as usize;
+                z_buffer[(s_row, s_col)] = z;
+                bright_mask[(s_row, s_col)] = if(full_bright){1}else{0};
+                n_buffer[column_major(s_row, s_col)] = n;
             }
         } // j
     } // i
@@ -295,13 +318,70 @@ pub fn depth_darkening(length_scale: f32, screen_state: &mut ScreenState) {
         let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
         for j in 0..W {
             if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
-            let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
-            let z = screen_state.z_buffer[(i as usize, j as usize)];
-            let dist2 = z*z*(1.0 + tan_i*tan_i + tan_j*tan_j);
-            // Heuristic based on aesthetic considerations:
-            //let scale = (-dist2.sqrt()/length_scale).exp();
-            let scale = 1.0/((dist2/l2) + 1.0);
+            let mut n = screen_state.n_buffer[column_major(i as usize, j as usize)];
+            let n2 = n.dot(&n);
+            let scale = if(n2 == 0.0){
+                0.0 // Just render black if no normal is available.
+            }else{
+                let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
+                let z = screen_state.z_buffer[(i as usize, j as usize)];
+                let x = SVector::<f32,3>::new(z*tan_j, z*tan_i, z);
+                let dist2 = x.dot(&x);
+
+                // Heuristic based on aesthetic considerations; ignoring surface normal looks nicer for
+                // low-poly/sprite-based graphics and pixel-art style.
+                1.0/((dist2/l2) + 1.0)
+
+                // Cosine scaling of brightness gives very cheap low-poly look here:
+                // n /= n2.sqrt();
+                // let xn = (x.dot(&n)/dist2.sqrt()).abs();
+                // xn/((dist2/l2) + 1.0)
+            };
             scale_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, scale);
         } // j
     } // i
 }
+
+pub struct DynamicLight {
+    pub x: SVector::<f32,3>,
+    // *Relative* brightness of RGB components, modulated based on length scale
+    pub rgb: SVector::<f32,3>,
+    // Intuitive handle to modulate overall strength of light with units of length
+    pub length_scale: f32,
+}
+
+// TODO: Generalize to iterate over a `&Vec` of dynamic lights, with indices obtained from a `CollisionStructure`.
+// TODO: Factor-out some duplicated lines from `depth_darkening`
+pub fn apply_dynamic_lighting(light: &DynamicLight, player: &Player, screen_state: &mut ScreenState) {
+    let l2 = light.length_scale*light.length_scale;
+    let light_x = transform_for_player(&(light.x), player);
+    for i in 0..H {
+        let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
+        for j in 0..W {
+            if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
+            let mut n = screen_state.n_buffer[column_major(i as usize, j as usize)];
+            let n2 = n.dot(&n);
+            if(n2 > 0.0){
+                let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
+                let z = screen_state.z_buffer[(i as usize, j as usize)];
+                let x = SVector::<f32,3>::new(z*tan_j, z*tan_i, z);
+                let dx = x - light_x;
+                if(dx.dot(&n)*x.dot(&n) > 0.0){
+                    // Only brighten the pixel if the light is on the same side of the polygon as the camera.
+                    let dist2 = dx.dot(&dx);
+
+                    // Heuristic based on aesthetic considerations; ignoring surface normal looks nicer for
+                    // low-poly/sprite-based graphics and pixel-art style.
+                    // let scale = 1.0/((dist2/l2) + 1.0);
+
+                    // Cosine scaling of brightness gives very cheap low-poly look here:
+                    n /= n2.sqrt();
+                    let xn = (dx.dot(&n)/dist2.sqrt()).abs();
+                    let scale = xn/((dist2/l2) + 1.0);
+
+                    brighten_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, &(scale*light.rgb));
+                } // if on same side as light
+            } // if n available
+        } // j
+    } // i
+} // apply_dynamic_lighting
