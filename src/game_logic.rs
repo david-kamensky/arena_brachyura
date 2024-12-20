@@ -1066,7 +1066,7 @@ impl<'a> Game<'a> {
         for i in minimap_x..(W as i32) {
             for j in minimap_y..(H as i32) {
                 screen_state.z_buffer[(j as usize, i as usize)] = 0.0;
-                screen_state.bright_mask[(j as usize, i as usize)] = 1;
+                screen_state.bright_mask[(j as usize, i as usize)] = BRIGHT_DIRECT;
             } // j
         } // i
     }
@@ -1118,16 +1118,34 @@ impl<'a> Game<'a> {
         }
 
         // Post-processing filter that adds a depth-darkening effect.
-        depth_darkening(self.parameters.darkening_length_scale, screen_state);
+        add_viewer_light(self.parameters.darkening_length_scale, screen_state);
 
         // Add effect of dynamic lights:
-        // TODO: Populate collision structure with multiple dynamic lights; for now only including projectile.
-        // TODO: Make colors and length scales of projectile and other dynamic light types parameters in level configuration file.
-        let light = DynamicLight{x: self.player.projectile.x,
-                                 rgb: SVector::<f32,3>::new(0.0,1.0,0.0),
-                                 length_scale:
-                                 if(self.player.projectile.ready && (self.player.projectile.splash_time <= 0)){0.0}else{1e2}};
-        apply_dynamic_lighting(&light, &self.player, screen_state);
+        // TODO: Populate collision structure with multiple dynamic lights instead of applying them one-by-one to the full screen.
+        if(!self.player.projectile.ready || (self.player.projectile.splash_time > 0)){
+            let light = DynamicLight{x: self.player.projectile.x,
+                                     rgb: PL_PROJ_LIGHT_COLOR,
+                                     length_scale: PL_PROJ_LIGHT_LENGTH};
+            apply_dynamic_lighting(&light, &self.player, screen_state);
+        }
+        for monster in &self.monsters {
+            // Exploding monsters and active monster spawns produce light sources:
+            if(monster.dead()){
+                let light = DynamicLight{x: SVector::<f32,3>::new(monster.x[0], monster.x[1], monster.z),
+                                         rgb: MONSTER_DEAD_LIGHT_COLOR,
+                                         length_scale: MONSTER_DEAD_LIGHT_LENGTH};
+                apply_dynamic_lighting(&light, &self.player, screen_state);
+            }
+            if(monster.spawn_timer > 0){
+                let light = DynamicLight{x: monster.x_spawn,
+                                         rgb: MONSTER_SPAWN_LIGHT_COLOR,
+                                         length_scale: MONSTER_SPAWN_LIGHT_LENGTH};
+                apply_dynamic_lighting(&light, &self.player, screen_state);
+            }
+        } // for monster
+
+        // Transfer the fully-lit scene into the screen buffer for rendering.
+        screen_state.lit_buffer_to_screen();
     }
 }
 

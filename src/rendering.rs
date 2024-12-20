@@ -19,7 +19,12 @@ use crate::pixel_ops::*;
 pub struct ScreenState<'a> {
     pub drawing_surface: Surface<'a>,
     pub z_buffer: DMatrix<f32>,
+    // Normal vector at each pixel:
     pub n_buffer: Vec::<SVector::<f32,3>>,
+    // Base RGB color (before any lighting) at each pixel:
+    pub color_buffer: Vec::<SVector::<f32,3>>,
+    // RGB color of each pixel after lighting:
+    pub lit_buffer: Vec::<SVector::<f32,3>>,
     // FIXME: Use a more memory-efficient representation of the full-bright mask, e.g., indexing into a bit-vec. (Or, use for
     // other per-pixel flags and differentiate w/ bitwise OR?)
     pub bright_mask: DMatrix<u8>,
@@ -32,14 +37,22 @@ pub fn row_major(i: usize, j: usize) -> usize {
     return i*(W as usize) + j;
 }
 
+// FIXME: Use clearer names and true enum.
+pub static BRIGHT_LIT: u8 = 0; // Full-bright pixels written directly to screen
+pub static BRIGHT_COLOR: u8 = 1; // Full-bright pixels from color buffer
+pub static BRIGHT_DIRECT: u8 = 2; // Lit pixels
+
 impl<'a> ScreenState<'a> {
     pub fn new(screen_surf: &WindowSurfaceRef) -> ScreenState<'a> {
+        let n_pixel: usize = (screen_surf.width()*screen_surf.height()) as usize;
         ScreenState{
             // NOTE: First three bytes of each pixel assumed to be RGB in low-level pixel operations; default for screen surface on only
             // system tested, but may not be guaranteed in general.
             drawing_surface: Surface::new(screen_surf.width(), screen_surf.height(), sdl2::pixels::PixelFormatEnum::RGB24).unwrap(),
             z_buffer: DMatrix::<f32>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
-            n_buffer: vec![SVector::<f32,3>::new(0.0,0.0,0.0); (screen_surf.width()*screen_surf.height()) as usize],
+            n_buffer: vec![SVector::<f32,3>::new(0.0,0.0,0.0); n_pixel],
+            color_buffer: vec![SVector::<f32,3>::new(0.0,0.0,0.0); n_pixel],
+            lit_buffer: vec![SVector::<f32,3>::new(0.0,0.0,0.0); n_pixel],
             bright_mask: DMatrix::<u8>::zeros(screen_surf.height() as usize, screen_surf.width() as usize),
         }
     } // new
@@ -48,15 +61,37 @@ impl<'a> ScreenState<'a> {
         // Reset z-buffer and full-bright mask:
         for i in 0..H{ for j in 0..W{
             self.z_buffer[(i as usize, j as usize)] = FAR_Z;
-            self.bright_mask[(i as usize, j as usize)] = 0;
-            self.n_buffer[column_major(i as usize, j as usize)] = SVector::<f32,3>::new(0.0,0.0,0.0);
+            self.bright_mask[(i as usize, j as usize)] = BRIGHT_LIT;
+            let ij = column_major(i as usize, j as usize);
+            self.n_buffer[ij] = SVector::<f32,3>::new(0.0,0.0,0.0);
+            self.color_buffer[ij] = SVector::<f32,3>::new(0.0,0.0,0.0);
+            self.lit_buffer[ij] = SVector::<f32,3>::new(0.0,0.0,0.0);
         }}
     } // reset
 
-    // Read from and write to the normal buffer as if it's logically 2D:
-    pub fn n(&self, i: usize, j: usize) -> &SVector::<f32,3>{
-        return &(self.n_buffer[column_major(i,j)]);
-    } // n
+    // After all lighting has been done, transfer the result of `lit_buffer` into the drawing surface to render on screen, or `color_buffer` for full-bright pixels.
+    pub fn lit_buffer_to_screen(&mut self){
+        for i in 0..H{ for j in 0..W{
+            // Skip "direct" full-bright pixels to avoid over-writing sky and HUD elements, which are drawn directly onto the screen surface (and flagged as direct) before
+            // rendering other things, to avoid unnecessary calculations of occluded pixels.
+            let bm_ij: u8 = self.bright_mask[(i as usize, j as usize)];
+            if(bm_ij == BRIGHT_DIRECT){continue;}
+            let ij: usize = column_major(i as usize, j as usize);
+            if(bm_ij == BRIGHT_LIT){
+                f32_vec_to_pixel(&(self.lit_buffer[ij]), &mut self.drawing_surface, j as usize, i as usize);
+            }else if(bm_ij == BRIGHT_COLOR){
+                f32_vec_to_pixel(&(self.color_buffer[ij]), &mut self.drawing_surface, j as usize, i as usize);
+            }
+        }}
+    }
+
+    // Full-bright rendering (transferring raw base color directly into lit buffer), mainly for debugging:
+    pub fn render_full_bright(&mut self){
+        for i in 0..H{ for j in 0..W{
+            let ij = column_major(i as usize, j as usize);
+            self.lit_buffer[ij] = self.color_buffer[ij];
+        }}
+    }
 }
 
 // NOTE: This interprets the pixel-space of the sky image as a spherical polar coordinate chart, so objects at higher
@@ -65,6 +100,7 @@ pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen_state: &mut
 
     let z_buffer = &mut screen_state.z_buffer;
     let screen = &mut screen_state.drawing_surface;
+    let bright_mask = &mut screen_state.bright_mask;
 
     let t_h = sky.height() as f32;
     let t_w = sky.width() as f32;
@@ -103,7 +139,10 @@ pub fn transform_and_draw_sky(player: &Player, sky: &Surface, screen_state: &mut
             let theta = x[0].atan2(x[1]);
             let tx = t_w*(theta + PI)/(2.0*PI);
             let ty = t_h*(0.5*PI - phi)/(0.5*PI);
+
+            // Sky is full-bright, and transferred directly to screen without going through floating-point lighting stage.
             transfer_pixel_opaque(sky, screen, tx as i32, ty as i32, i as i32, j as i32);
+            bright_mask[(j as usize, i as usize)] = BRIGHT_DIRECT;
         } // i
     } // j
 }
@@ -123,6 +162,7 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
 
     let z_buffer = &mut screen_state.z_buffer;
     let n_buffer = &mut screen_state.n_buffer;
+    let color_buffer = &mut screen_state.color_buffer;
     let bright_mask = &mut screen_state.bright_mask;
     let screen = &mut screen_state.drawing_surface;
 
@@ -227,11 +267,14 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
                 if(t_col < 0){t_col += t_w_i;}
                 if(t_row < 0){t_row += t_h_i;}
             }
-            if(transfer_pixel_no_bounds(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
+
+            // FIXME: Testing; should be `_no_bounds` version
+            //if(transfer_pixel_no_bounds(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
+            if(transfer_pixel_color_general(texture, color_buffer, t_col, t_row, W2_i, H2_j, transparent)){
                 let s_row = H2_j as usize;
                 let s_col = W2_i as usize;
                 z_buffer[(s_row, s_col)] = z;
-                bright_mask[(s_row, s_col)] = if(full_bright){1}else{0};
+                bright_mask[(s_row, s_col)] = if(full_bright){BRIGHT_COLOR}else{BRIGHT_LIT};
                 n_buffer[column_major(s_row, s_col)] = n;
             }
         } // j
@@ -275,7 +318,7 @@ pub fn draw_sprite_2d(source: &Surface, rect: &Rect, screen_state: &mut ScreenSt
                 // to block anything from rendering over the 2D sprite.
                 screen_state.z_buffer[(j as usize,i as usize)] = 0.0;
                 // All 2D sprites are full-bright.
-                screen_state.bright_mask[(j as usize,i as usize)] = 1;
+                screen_state.bright_mask[(j as usize,i as usize)] = BRIGHT_DIRECT;
             } // if
         } // i
     } // j
@@ -309,16 +352,19 @@ pub fn transform_for_player(x: &SVector<f32,3>, player: &Player) -> SVector<f32,
                                  x_yaw[1]*sin_pitch + x_yaw[2]*cos_pitch);
 }
 
-// Darken `draw_surf` based on `z_buffer`, with brightness drop-off dictated by `length_scale`. Negative length scale
-// indicates full-bright lighting, and the function is a no-op.
-pub fn depth_darkening(length_scale: f32, screen_state: &mut ScreenState) {
-    if(length_scale < 0.0){return;}
+// Some simplifications relative to general dynamic lights.
+pub fn add_viewer_light(length_scale: f32, screen_state: &mut ScreenState){
+    if(length_scale < 0.0){
+        screen_state.render_full_bright();
+        return;
+    }
     let l2 = length_scale*length_scale;
     for i in 0..H {
         let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
         for j in 0..W {
-            if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
-            let mut n = screen_state.n_buffer[column_major(i as usize, j as usize)];
+            if(screen_state.bright_mask[(i as usize, j as usize)] != BRIGHT_LIT){continue;}
+            let ij: usize = column_major(i as usize, j as usize);
+            let mut n = screen_state.n_buffer[ij];
             let n2 = n.dot(&n);
             let scale = if(n2 == 0.0){
                 0.0 // Just render black if no normal is available.
@@ -337,7 +383,8 @@ pub fn depth_darkening(length_scale: f32, screen_state: &mut ScreenState) {
                 // let xn = (x.dot(&n)/dist2.sqrt()).abs();
                 // xn/((dist2/l2) + 1.0)
             };
-            scale_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, scale);
+            //scale_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, scale);
+            screen_state.lit_buffer[ij] += scale*screen_state.color_buffer[ij];
         } // j
     } // i
 }
@@ -351,7 +398,7 @@ pub struct DynamicLight {
 }
 
 // TODO: Generalize to iterate over a `&Vec` of dynamic lights, with indices obtained from a `CollisionStructure`.
-// TODO: Factor-out some duplicated lines from `depth_darkening`
+// TODO: Factor-out some duplicated lines from `add_viewer_light`
 pub fn apply_dynamic_lighting(light: &DynamicLight, player: &Player, screen_state: &mut ScreenState) {
     let l2 = light.length_scale*light.length_scale;
     let light_x = transform_for_player(&(light.x), player);
@@ -359,7 +406,8 @@ pub fn apply_dynamic_lighting(light: &DynamicLight, player: &Player, screen_stat
         let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
         for j in 0..W {
             if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
-            let mut n = screen_state.n_buffer[column_major(i as usize, j as usize)];
+            let ij = column_major(i as usize, j as usize);
+            let mut n = screen_state.n_buffer[ij];
             let n2 = n.dot(&n);
             if(n2 > 0.0){
                 let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
@@ -367,19 +415,23 @@ pub fn apply_dynamic_lighting(light: &DynamicLight, player: &Player, screen_stat
                 let x = SVector::<f32,3>::new(z*tan_j, z*tan_i, z);
                 let dx = x - light_x;
                 if(dx.dot(&n)*x.dot(&n) > 0.0){
+                    // Scale color components of light source by base color components of surface to get reflected color:
+                    let mut reflected_color: SVector::<f32,3> = screen_state.color_buffer[ij];
+                    for component in 0..3 {reflected_color[component] *= light.rgb[component];}
                     // Only brighten the pixel if the light is on the same side of the polygon as the camera.
                     let dist2 = dx.dot(&dx);
 
-                    // Heuristic based on aesthetic considerations; ignoring surface normal looks nicer for
+                    // Heuristic based on aesthetic considerations; ignoring surface normal may look nicer for
                     // low-poly/sprite-based graphics and pixel-art style.
                     // let scale = 1.0/((dist2/l2) + 1.0);
 
-                    // Cosine scaling of brightness gives very cheap low-poly look here:
+                    // TODO: Use cosine scaling for dynamic lights? (Aesthetic judgement.)
                     n /= n2.sqrt();
                     let xn = (dx.dot(&n)/dist2.sqrt()).abs();
                     let scale = xn/((dist2/l2) + 1.0);
 
-                    brighten_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, &(scale*light.rgb));
+                    //brighten_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, &(scale*reflected_color));
+                    screen_state.lit_buffer[ij] += scale*reflected_color;
                 } // if on same side as light
             } // if n available
         } // j

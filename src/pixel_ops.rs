@@ -9,10 +9,53 @@ use std::ffi::c_void;
 
 use nalgebra::SVector;
 
+use crate::constants::*;
+use crate::rendering::*;
+
+// Get the pixel as a floating-point vector of RGB components, normalized to the range [0,1]:
+pub fn pixel_to_f32_vec(surf: &Surface, x: i32, y: i32) -> SVector::<f32,3> {
+    let bpp = surf.pixel_format_enum().byte_size_per_pixel() as i32;
+    let pitch = surf.pitch() as i32;
+    let offset: i32 = bpp*x + pitch*y;
+    unsafe {
+        let pixels: *mut c_void = (*surf.raw()).pixels;
+        let pixels_offset: *mut c_void = pixels.wrapping_add(offset as usize);
+        let r_f = *(pixels_offset as *const u8) as f32;
+        let g_f = *((pixels_offset.wrapping_add(1 as usize)) as *const u8) as f32;
+        let b_f = *((pixels_offset.wrapping_add(2 as usize)) as *const u8) as f32;
+        return SVector::<f32,3>::new(r_f/255.0, g_f/255.0, b_f/255.0);
+    } // unsafe
+}
+
+// Convert a floating-point color vector back to bytes and write to a pixel at the specified coordinates:
+pub fn f32_vec_to_pixel(rgb: &SVector::<f32,3>, surf: &mut Surface, x: usize, y: usize) {
+
+    let bpp = surf.pixel_format_enum().byte_size_per_pixel() as usize;
+    let pitch = surf.pitch() as usize;
+    let offset: usize = bpp*x + pitch*y;
+    let mut r_f = rgb[0]*255.0;
+    let mut g_f = rgb[1]*255.0;
+    let mut b_f = rgb[2]*255.0;
+    // TODO: Necessary? How does `as u8` handle out-of-bounds?
+    r_f = f32::min(f32::max(0.0, r_f), 255.0);
+    g_f = f32::min(f32::max(0.0, g_f), 255.0);
+    b_f = f32::min(f32::max(0.0, b_f), 255.0);
+    let r_u = r_f as u8;
+    let g_u = g_f as u8;
+    let b_u = b_f as u8;
+    unsafe {
+        let pixels: *mut c_void = (*surf.raw()).pixels;
+        let pixels_offset: *mut c_void = pixels.wrapping_add(offset);
+        std::ptr::copy_nonoverlapping(&r_u, pixels_offset as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&g_u, pixels_offset.wrapping_add(1 as usize) as *mut u8, 1);
+        std::ptr::copy_nonoverlapping(&b_u, pixels_offset.wrapping_add(2 as usize) as *mut u8, 1);
+    } // unsafe
+}
+
 // Most general pixel transfer function; useful for debugging and prototyping, but has too much branching logic
 // for optimal use tight loops.  Returns true if the pixel was transferred, false if not (e.g., for transparency
 // or out-of-bounds.)
-pub fn transfer_pixel_general(source: &Surface, dest: &Surface, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
+pub fn transfer_pixel_general(source: &Surface, dest: &mut Surface, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
 
     let source_bpp = source.pixel_format_enum().byte_size_per_pixel() as i32;
     let source_pitch = source.pitch() as i32;
@@ -47,8 +90,25 @@ pub fn transfer_pixel_general(source: &Surface, dest: &Surface, sx: i32, sy: i32
     return false;
 }
 
+// FIXME: Create specialized reduced-branching versions of this once it's working.
+pub fn transfer_pixel_color_general(source: &Surface, color_buffer: &mut Vec::<SVector::<f32,3>>, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
+    let source_w = source.width() as i32;
+    let source_h = source.height() as i32;
+    if((dx >= 0) && (dy >=  0) && (dx < (W as i32)) && (dy < (H as i32)) && (sx >= 0) && (sy >=  0) && (sx < source_w) && (sy < source_h)){
+        let color: SVector::<f32,3> = pixel_to_f32_vec(source, sx, sy);
+        if(!(transparent
+             // Use color (0,0,0) to signal transparency.
+             && (color[0] == 0.0) && (color[1] == 0.0) && (color[2] == 0.0))){
+            color_buffer[column_major(dy as usize, dx as usize)] = color;
+            return true;
+        } // if
+        return false;
+    } // if
+    return false;
+}
+
 // Similar to general case, but with no bounds checks.
-pub fn transfer_pixel_no_bounds(source: &Surface, dest: &Surface, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
+pub fn transfer_pixel_no_bounds(source: &Surface, dest: &mut Surface, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
 
     let source_bpp = source.pixel_format_enum().byte_size_per_pixel() as i32;
     let source_pitch = source.pitch() as i32;
@@ -75,7 +135,7 @@ pub fn transfer_pixel_no_bounds(source: &Surface, dest: &Surface, sx: i32, sy: i
 }
 
 // Transferring a pixel with no regard for transparency and no bounds checks on surfaces.
-pub fn transfer_pixel_opaque(source: &Surface, dest: &Surface, sx: i32, sy: i32, dx: i32, dy: i32) {
+pub fn transfer_pixel_opaque(source: &Surface, dest: &mut Surface, sx: i32, sy: i32, dx: i32, dy: i32) {
 
     let source_bpp = source.pixel_format_enum().byte_size_per_pixel() as i32;
     let source_pitch = source.pitch() as i32;
@@ -94,7 +154,7 @@ pub fn transfer_pixel_opaque(source: &Surface, dest: &Surface, sx: i32, sy: i32,
 
 // Transferring a pixel with black as transparent, but no bounds checks on surfaces. Returns true if
 // pixel transferred, false if not.
-pub fn transfer_pixel_transparent(source: &Surface, dest: &Surface, sx: i32, sy: i32, dx: i32, dy: i32) -> bool {
+pub fn transfer_pixel_transparent(source: &Surface, dest: &mut Surface, sx: i32, sy: i32, dx: i32, dy: i32) -> bool {
 
     let source_bpp = source.pixel_format_enum().byte_size_per_pixel() as i32;
     let source_pitch = source.pitch() as i32;
@@ -118,7 +178,7 @@ pub fn transfer_pixel_transparent(source: &Surface, dest: &Surface, sx: i32, sy:
 }
 
 // Scaling the brightness of a pixel by a floating-point number; assumed to be in range [0,1] without checking.
-pub fn scale_pixel(surf: &Surface, x: i32, y: i32, scale: f32) {
+pub fn scale_pixel(surf: &mut Surface, x: i32, y: i32, scale: f32) {
 
     let bpp = surf.pixel_format_enum().byte_size_per_pixel() as i32;
     let pitch = surf.pitch() as i32;
@@ -141,7 +201,7 @@ pub fn scale_pixel(surf: &Surface, x: i32, y: i32, scale: f32) {
 // Brighten each color component additively, given floating-point RGB values. The RGB values are assumed to
 // be normalized such that a value of 1.0 corresponds to trying to add 255 to the corresponding pixel color
 // component.
-pub fn brighten_pixel(surf: &Surface, x: i32, y: i32, rgb: &SVector::<f32,3>) {
+pub fn brighten_pixel(surf: &mut Surface, x: i32, y: i32, rgb: &SVector::<f32,3>) {
 
     let bpp = surf.pixel_format_enum().byte_size_per_pixel() as i32;
     let pitch = surf.pitch() as i32;
