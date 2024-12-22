@@ -1121,28 +1121,21 @@ impl<'a> Game<'a> {
         add_viewer_light(self.parameters.darkening_length_scale, screen_state);
 
         // Add effect of dynamic lights:
-        // TODO: Populate collision structure with multiple dynamic lights instead of applying them one-by-one to the full screen.
+        let mut lights = Vec::<DynamicLight>::new();
         if(!self.player.projectile.ready || (self.player.projectile.splash_time > 0)){
-            let light = DynamicLight{x: self.player.projectile.x,
-                                     rgb: PL_PROJ_LIGHT_COLOR,
-                                     length_scale: PL_PROJ_LIGHT_LENGTH};
-            apply_dynamic_lighting(&light, &self.player, screen_state);
+            lights.push(DynamicLight::new(&self.player, &self.player.projectile.x, &PL_PROJ_LIGHT_COLOR, PL_PROJ_LIGHT_LENGTH));
         }
         for monster in &self.monsters {
             // Exploding monsters and active monster spawns produce light sources:
             if(monster.dead()){
-                let light = DynamicLight{x: SVector::<f32,3>::new(monster.x[0], monster.x[1], monster.z),
-                                         rgb: MONSTER_DEAD_LIGHT_COLOR,
-                                         length_scale: MONSTER_DEAD_LIGHT_LENGTH};
-                apply_dynamic_lighting(&light, &self.player, screen_state);
+                lights.push(DynamicLight::new(&self.player, &(SVector::<f32,3>::new(monster.x[0], monster.x[1], monster.z)),
+                                              &MONSTER_DEAD_LIGHT_COLOR, MONSTER_DEAD_LIGHT_LENGTH));
             }
             if(monster.spawn_timer > 0){
-                let light = DynamicLight{x: monster.x_spawn,
-                                         rgb: MONSTER_SPAWN_LIGHT_COLOR,
-                                         length_scale: MONSTER_SPAWN_LIGHT_LENGTH};
-                apply_dynamic_lighting(&light, &self.player, screen_state);
+                lights.push(DynamicLight::new(&self.player, &monster.x_spawn, &MONSTER_SPAWN_LIGHT_COLOR, MONSTER_SPAWN_LIGHT_LENGTH));
             }
         } // for monster
+        apply_dynamic_lighting(&lights, screen_state);
 
         // Transfer the fully-lit scene into the screen buffer for rendering.
         screen_state.lit_buffer_to_screen();

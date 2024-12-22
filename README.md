@@ -1,6 +1,6 @@
 # Arena Brachyura
 
-This is a minimal software-rendered FPS game I wrote as an exercise to try out the internet's "[most admired](https://github.blog/2023-08-30-why-rust-is-the-most-admired-language-among-developers/)" programming language, Rust. It started as a direct port of a smaller "2.5D" game I'd written in college while learning C/C++, but I ended up generalizing it in a number of ways, including 3D mouselook. I also overhauled the art with various crab-like monsters inspired by Rust's unofficial mascot, hence "*Brachyura*" (the scientific name for crabs) in the title.
+This is a minimal software-rendered FPS game I wrote as an exercise to try out the internet's "[most admired](https://github.blog/2023-08-30-why-rust-is-the-most-admired-language-among-developers/)" programming language, Rust. It started as a direct port of a smaller "2.5D" game I'd written in college while learning C/C++, but I ended up generalizing it in a number of ways, including 3D mouselook and dynamic lighting. I also overhauled the art with various crab-like monsters inspired by Rust's unofficial mascot, hence "*Brachyura*" (the scientific name for crabs) in the title.
 
 ## How to compile and run
 

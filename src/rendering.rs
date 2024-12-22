@@ -396,43 +396,52 @@ pub struct DynamicLight {
     pub length_scale: f32,
 }
 
+impl DynamicLight {
+    // This constructor transforms the input location `x` relative to a given `player` for subsequent rendering operations.
+    pub fn new(player: &Player, x: &SVector::<f32,3>, rgb: &SVector::<f32,3>, length_scale: f32) -> DynamicLight {
+        let x_transformed = transform_for_player(&x, &player);
+        return DynamicLight{x: x_transformed, rgb: *rgb, length_scale: length_scale};
+    }
+}
+
 // TODO: Generalize to iterate over a `&Vec` of dynamic lights, with indices obtained from a `CollisionStructure`.
 // TODO: Factor-out some duplicated lines from `add_viewer_light`
-pub fn apply_dynamic_lighting(light: &DynamicLight, player: &Player, screen_state: &mut ScreenState) {
-    let l2 = light.length_scale*light.length_scale;
-    let light_x = transform_for_player(&(light.x), player);
-    for i in 0..H {
-        let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
-        for j in 0..W {
-            if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
-            let ij = column_major(i as usize, j as usize);
-            let mut n = screen_state.n_buffer[ij];
-            let n2 = n.dot(&n);
-            if(n2 > 0.0){
-                let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
-                let z = screen_state.z_buffer[(i as usize, j as usize)];
-                let x = SVector::<f32,3>::new(z*tan_j, z*tan_i, z);
-                let dx = x - light_x;
-                if(dx.dot(&n)*x.dot(&n) > 0.0){
-                    // Scale color components of light source by base color components of surface to get reflected color:
-                    let mut reflected_color: SVector::<f32,3> = screen_state.color_buffer[ij];
-                    for component in 0..3 {reflected_color[component] *= light.rgb[component];}
-                    // Only brighten the pixel if the light is on the same side of the polygon as the camera.
-                    let dist2 = dx.dot(&dx);
+pub fn apply_dynamic_lighting(lights: &Vec::<DynamicLight>, screen_state: &mut ScreenState) {
+    for light in lights {
+        let l2 = light.length_scale*light.length_scale;
+        for i in 0..H {
+            let tan_i = ((i as f32) - (H2 as f32))/(W2 as f32);
+            for j in 0..W {
+                if(screen_state.bright_mask[(i as usize, j as usize)] != 0){continue;}
+                let ij = column_major(i as usize, j as usize);
+                let mut n = screen_state.n_buffer[ij];
+                let n2 = n.dot(&n);
+                if(n2 > 0.0){
+                    let tan_j = ((j as f32) - (W2 as f32))/(W2 as f32);
+                    let z = screen_state.z_buffer[(i as usize, j as usize)];
+                    let x = SVector::<f32,3>::new(z*tan_j, z*tan_i, z);
+                    let dx = x - light.x;
+                    if(dx.dot(&n)*x.dot(&n) > 0.0){
+                        // Scale color components of light source by base color components of surface to get reflected color:
+                        let mut reflected_color: SVector::<f32,3> = screen_state.color_buffer[ij];
+                        for component in 0..3 {reflected_color[component] *= light.rgb[component];}
+                        // Only brighten the pixel if the light is on the same side of the polygon as the camera.
+                        let dist2 = dx.dot(&dx);
 
-                    // Heuristic based on aesthetic considerations; ignoring surface normal may look nicer for
-                    // low-poly/sprite-based graphics and pixel-art style.
-                    // let scale = 1.0/((dist2/l2) + 1.0);
+                        // Heuristic based on aesthetic considerations; ignoring surface normal may look nicer for
+                        // low-poly/sprite-based graphics and pixel-art style.
+                        // let scale = 1.0/((dist2/l2) + 1.0);
 
-                    // TODO: Use cosine scaling for dynamic lights? (Aesthetic judgement.)
-                    n /= n2.sqrt();
-                    let xn = (dx.dot(&n)/dist2.sqrt()).abs();
-                    let scale = xn/((dist2/l2) + 1.0);
+                        // TODO: Use cosine scaling for dynamic lights? (Aesthetic judgement.)
+                        n /= n2.sqrt();
+                        let xn = (dx.dot(&n)/dist2.sqrt()).abs();
+                        let scale = xn/((dist2/l2) + 1.0);
 
-                    //brighten_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, &(scale*reflected_color));
-                    screen_state.lit_buffer[ij] += scale*reflected_color;
-                } // if on same side as light
-            } // if n available
-        } // j
-    } // i
+                        //brighten_pixel(&mut screen_state.drawing_surface, j as i32, i as i32, &(scale*reflected_color));
+                        screen_state.lit_buffer[ij] += scale*reflected_color;
+                    } // if on same side as light
+                } // if n available
+            } // j
+        } // i
+    } // light
 } // apply_dynamic_lighting
