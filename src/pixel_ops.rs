@@ -90,7 +90,7 @@ pub fn transfer_pixel_general(source: &Surface, dest: &mut Surface, sx: i32, sy:
     return false;
 }
 
-// FIXME: Create specialized reduced-branching versions of this once it's working.
+// Transfer the color of a pixel from `source` to `color_buffer`, checking bounds and making transparency optional.
 pub fn transfer_pixel_color_general(source: &Surface, color_buffer: &mut Vec::<SVector::<f32,3>>, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
     let source_w = source.width() as i32;
     let source_h = source.height() as i32;
@@ -103,6 +103,18 @@ pub fn transfer_pixel_color_general(source: &Surface, color_buffer: &mut Vec::<S
             return true;
         } // if
         return false;
+    } // if
+    return false;
+}
+
+// Transfer the color of a pixel to `color_buffer` with an assumption that the caller handles bounds checking on both the source and destination.
+pub fn transfer_pixel_color_no_bounds(source: &Surface, color_buffer: &mut Vec::<SVector::<f32,3>>, sx: i32, sy: i32, dx: i32, dy: i32, transparent: bool) -> bool {
+    let color: SVector::<f32,3> = pixel_to_f32_vec(source, sx, sy);
+    if(!(transparent
+         // Use color (0,0,0) to signal transparency.
+         && (color[0] == 0.0) && (color[1] == 0.0) && (color[2] == 0.0))){
+        color_buffer[column_major(dy as usize, dx as usize)] = color;
+        return true;
     } // if
     return false;
 }

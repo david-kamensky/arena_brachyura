@@ -268,9 +268,8 @@ pub fn render_parallelogram(x0: &SVector<f32,3>, x1: &SVector<f32,3>, x2: &SVect
                 if(t_row < 0){t_row += t_h_i;}
             }
 
-            // FIXME: Testing; should be `_no_bounds` version
-            //if(transfer_pixel_no_bounds(texture, screen, t_col, t_row, W2_i, H2_j, transparent)){
-            if(transfer_pixel_color_general(texture, color_buffer, t_col, t_row, W2_i, H2_j, transparent)){
+            // If the pixel color was transferred, update associated screen buffers.
+            if(transfer_pixel_color_no_bounds(texture, color_buffer, t_col, t_row, W2_i, H2_j, transparent)){
                 let s_row = H2_j as usize;
                 let s_col = W2_i as usize;
                 z_buffer[(s_row, s_col)] = z;
